@@ -1,0 +1,422 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="theme-color" content="#0f766e">
+<title>Expense & Mileage Tracker</title>
+<style>
+:root{--bg:#f4f6f8;--card:#fff;--text:#1b2430;--muted:#667085;--line:#e3e8ee;--accent:#0f766e;--accent2:#115e59;--danger:#b42318}
+@media (prefers-color-scheme:dark){:root{--bg:#10151b;--card:#1a212a;--text:#e7ecf2;--muted:#9aa7b5;--line:#2b3541;--accent:#2dd4bf;--accent2:#5eead4;--danger:#f97066}}
+*{box-sizing:border-box}
+body{margin:0;font:16px/1.4 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:var(--bg);color:var(--text)}
+header{background:var(--accent);color:#fff;padding:12px 16px;position:sticky;top:0;z-index:5}
+header h1{margin:0;font-size:18px}
+@media (prefers-color-scheme:dark){header{color:#06201d}}
+nav{display:flex;gap:4px;background:var(--card);border-bottom:1px solid var(--line);position:sticky;top:44px;z-index:4;overflow-x:auto}
+nav button{flex:1;min-width:80px;padding:12px 8px;border:0;background:none;color:var(--muted);font-size:15px;border-bottom:3px solid transparent;cursor:pointer}
+nav button.on{color:var(--accent);border-color:var(--accent);font-weight:600}
+main{max-width:820px;margin:0 auto;padding:16px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:14px;margin-bottom:14px}
+label{display:block;font-size:13px;color:var(--muted);margin:10px 0 4px}
+input,select,textarea{width:100%;padding:10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);font:inherit}
+.row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+button.btn{padding:11px 16px;border:0;border-radius:8px;background:var(--accent);color:#fff;font:inherit;font-weight:600;cursor:pointer}
+@media (prefers-color-scheme:dark){button.btn{color:#06201d}}
+button.btn.sec{background:var(--bg);color:var(--text);border:1px solid var(--line)}
+button.btn.del{background:none;color:var(--danger);border:1px solid var(--line)}
+.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:14px}
+.item{display:flex;gap:12px;align-items:center;padding:10px 0;border-bottom:1px solid var(--line);cursor:pointer}
+.item:last-child{border:0}
+.thumb{width:52px;height:52px;border-radius:8px;object-fit:cover;background:var(--bg);flex:none;border:1px solid var(--line);display:flex;align-items:center;justify-content:center;font-size:22px}
+.item .main{flex:1;min-width:0}
+.item .t{font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.item .s{font-size:13px;color:var(--muted)}
+.amt{font-weight:700;white-space:nowrap}
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+.stat{background:var(--bg);border-radius:10px;padding:12px}
+.stat b{display:block;font-size:22px}
+.stat span{font-size:13px;color:var(--muted)}
+.photos{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.photos div{position:relative}
+.photos img{width:90px;height:90px;object-fit:cover;border-radius:8px;border:1px solid var(--line);cursor:zoom-in}
+.photos .x{position:absolute;top:-6px;right:-6px;width:22px;height:22px;border-radius:50%;border:0;background:var(--danger);color:#fff;cursor:pointer;line-height:1}
+table{width:100%;border-collapse:collapse;font-size:14px}
+td,th{padding:6px 4px;border-bottom:1px solid var(--line);text-align:left}
+td.r,th.r{text-align:right}
+.hidden{display:none}
+.muted{color:var(--muted);font-size:13px}
+#lightbox{position:fixed;inset:0;background:rgba(0,0,0,.85);display:none;align-items:center;justify-content:center;z-index:50;padding:10px}
+#lightbox img{max-width:100%;max-height:100%}
+.gps{text-align:center}
+.gps .big{font-size:40px;font-weight:700}
+.syncbtn{border:1px solid rgba(255,255,255,.55);background:transparent;color:inherit;border-radius:999px;padding:6px 12px;font:inherit;font-size:13px;cursor:pointer;white-space:nowrap}
+#report{display:none}
+@media print{
+  header,nav,main{display:none!important}
+  #report{display:block!important;color:#000;background:#fff;padding:0}
+  body{background:#fff}
+  .rimg{break-inside:avoid;margin:6px 0}
+  .rimg img{max-width:100%;max-height:420px}
+}
+#report h2{margin:16px 0 6px}
+</style>
+</head>
+<body>
+<header style="display:flex;justify-content:space-between;align-items:center;gap:8px"><h1>Expense &amp; Mileage Tracker</h1><button id="syncbtn" class="syncbtn">☁</button></header>
+<nav id="nav">
+  <button data-v="summary" class="on">Summary</button>
+  <button data-v="receipts">Receipts</button>
+  <button data-v="mileage">Mileage</button>
+  <button data-v="settings">Settings</button>
+</nav>
+<main id="main"></main>
+<div id="report"></div>
+<div id="lightbox" onclick="this.style.display='none'"><img id="lbimg"></div>
+
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+<script>
+// ---------- storage (IndexedDB) ----------
+let db;
+function openDB(){return new Promise((res,rej)=>{
+  const r=indexedDB.open('expense-tracker',1);
+  r.onupgradeneeded=()=>{const d=r.result;d.createObjectStore('receipts',{keyPath:'id'});d.createObjectStore('trips',{keyPath:'id'});};
+  r.onsuccess=()=>{db=r.result;res()};r.onerror=()=>rej(r.error);
+});}
+const tx=(s,m='readonly')=>db.transaction(s,m).objectStore(s);
+const req=r=>new Promise((res,rej)=>{r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)});
+const all=s=>req(tx(s).getAll());
+const put=(s,o)=>req(tx(s,'readwrite').put(o));
+const rm=(s,id)=>req(tx(s,'readwrite').delete(id));
+const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
+
+const DEF={rate:0.70,categories:['Meals','Supplies','Fuel','Travel','Software','Equipment','Advertising','Utilities','Other']};
+const settings=()=>{try{return Object.assign({},DEF,JSON.parse(localStorage.getItem('et-settings')||'{}'))}catch(e){return {...DEF}}};
+const saveSettings=s=>localStorage.setItem('et-settings',JSON.stringify(s));
+
+// ---------- helpers ----------
+const $=(s,r=document)=>r.querySelector(s);
+const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const money=n=>'$'+(Number(n)||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+const today=()=>new Date().toISOString().slice(0,10);
+let view='summary', year=String(new Date().getFullYear());
+let receipts=[],trips=[];
+
+async function load(){
+  receipts=await all('receipts');trips=await all('trips');
+  for(const [s,arr] of [['receipts',receipts],['trips',trips]])for(const r of arr){let ch=false;
+    if(!r.updated){r.updated=Date.now();ch=true}
+    if(s==='receipts'){const ph=r.photos||[],p=r.pids||[];if(p.length!==ph.length||!r.photos){r.photos=ph;r.pids=ph.map((_,i)=>p[i]||uid());ch=true}}
+    if(ch)await put(s,r);}
+  receipts.sort((a,b)=>b.date.localeCompare(a.date));trips.sort((a,b)=>b.date.localeCompare(a.date));
+}
+function years(){const s=new Set([String(new Date().getFullYear())]);[...receipts,...trips].forEach(x=>s.add(x.date.slice(0,4)));return [...s].sort().reverse();}
+
+// compress image to JPEG data URL
+function compress(file,max=1600,q=0.75){return new Promise((res,rej)=>{
+  const img=new Image(),url=URL.createObjectURL(file);
+  img.onload=()=>{const k=Math.min(1,max/Math.max(img.width,img.height));
+    const c=document.createElement('canvas');c.width=Math.round(img.width*k);c.height=Math.round(img.height*k);
+    c.getContext('2d').drawImage(img,0,0,c.width,c.height);URL.revokeObjectURL(url);res(c.toDataURL('image/jpeg',q));};
+  img.onerror=()=>{URL.revokeObjectURL(url);rej(new Error('Could not read image'))};img.src=url;});}
+function zoom(src){$('#lbimg').src=src;$('#lightbox').style.display='flex';}
+
+// ---------- views ----------
+let inForm=false;
+function render(){
+  inForm=false;updateStatus();
+  document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('on',b.dataset.v===view));
+  ({summary:vSummary,receipts:vReceipts,mileage:vMileage,settings:vSettings})[view]();
+}
+document.getElementById('nav').onclick=e=>{if(e.target.dataset.v){view=e.target.dataset.v;render();window.scrollTo(0,0)}};
+
+function yearPicker(){return `<select id="yr" style="width:auto">${years().map(y=>`<option ${y===year?'selected':''}>${y}</option>`).join('')}</select>`}
+function bindYear(){const y=$('#yr');if(y)y.onchange=()=>{year=y.value;render()}}
+
+function totals(){
+  const r=receipts.filter(x=>x.date.startsWith(year)),t=trips.filter(x=>x.date.startsWith(year));
+  const by={};r.forEach(x=>by[x.category]=(by[x.category]||0)+Number(x.amount));
+  const spent=r.reduce((a,x)=>a+Number(x.amount),0),miles=t.reduce((a,x)=>a+Number(x.miles),0);
+  return {r,t,by,spent,miles,ded:miles*settings().rate};
+}
+
+function vSummary(){
+  const T=totals();
+  $('#main').innerHTML=`
+  <div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">Tax year</h3>${yearPicker()}</div>
+   <div class="stats" style="margin-top:12px">
+    <div class="stat"><b>${money(T.spent)}</b><span>Receipts (${T.r.length})</span></div>
+    <div class="stat"><b>${T.miles.toFixed(1)} mi</b><span>Business miles (${T.t.length} trips)</span></div>
+    <div class="stat"><b>${money(T.ded)}</b><span>Mileage deduction @ ${money(settings().rate)}/mi</span></div>
+    <div class="stat"><b>${money(T.spent+T.ded)}</b><span>Total deductible</span></div>
+   </div></div>
+  <div class="card"><h3 style="margin-top:0">By category</h3>
+   ${Object.keys(T.by).length?`<table>${Object.entries(T.by).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<tr><td>${esc(k)}</td><td class="r">${money(v)}</td></tr>`).join('')}</table>`:'<p class="muted">No receipts this year yet.</p>'}</div>
+  <div class="card"><h3 style="margin-top:0">Export ${year}</h3>
+   <div class="actions"><button class="btn" id="csvR">Receipts CSV</button><button class="btn" id="csvT">Mileage CSV</button><button class="btn sec" id="pdf">PDF report with photos</button></div>
+   <p class="muted">The report includes your receipt photos. Open it and use Print → Save as PDF.</p></div>`;
+  bindYear();$('#csvR').onclick=()=>csv('receipts');$('#csvT').onclick=()=>csv('trips');$('#pdf').onclick=report;
+}
+
+async function download(name,text,type='text/csv'){
+  try{const d=await window.claude?.use?.('downloads');
+    if(d){await d.save({filename:name,data:new Blob([text],{type})});return}}catch(e){if(e&&e.code==='user_declined')return}
+  const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([text],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);}
+const q=v=>`"${String(v??'').replace(/"/g,'""')}"`;
+function csv(kind){
+  const T=totals();
+  if(kind==='receipts'){
+    download(`receipts-${year}.csv`,'Date,Vendor,Category,Amount,Notes,Has Photo\n'+[...T.r].sort((a,b)=>a.date.localeCompare(b.date)).map(x=>[x.date,q(x.vendor),q(x.category),Number(x.amount).toFixed(2),q(x.notes),(x.photos||[]).length?'Yes':'No'].join(',')).join('\n'));
+  }else{
+    const rate=settings().rate;
+    download(`mileage-${year}.csv`,'Date,From,To,Purpose,Odometer Start,Odometer End,Miles,Deduction\n'+[...T.t].sort((a,b)=>a.date.localeCompare(b.date)).map(x=>[x.date,q(x.from),q(x.to),q(x.purpose),x.odoStart??'',x.odoEnd??'',Number(x.miles).toFixed(1),(x.miles*rate).toFixed(2)].join(',')).join('\n'));
+  }
+}
+async function report(){
+  const body=reportBody();
+  let d=null;try{d=await window.claude?.use?.('downloads')}catch(e){}
+  if(d){
+    const html=`<!doctype html><html><head><meta charset="utf-8"><title>Expense Report ${year}</title><style>body{font:14px system-ui,sans-serif;max-width:800px;margin:20px auto;padding:0 16px;color:#000}table{width:100%;border-collapse:collapse}td,th{padding:5px 4px;border-bottom:1px solid #ccc;text-align:left}.r{text-align:right}.rimg{break-inside:avoid;margin:10px 0}.rimg img{max-width:100%;max-height:420px;display:block;margin:4px 0}@media print{button{display:none}}</style></head><body><button onclick="print()">Print / Save as PDF</button>${body}</body></html>`;
+    download(`expense-report-${year}.html`,html,'text/html');
+  }else{$('#report').innerHTML=body;setTimeout(()=>window.print(),150);}
+}
+function reportBody(){
+  const T=totals(),rate=settings().rate;
+  const rs=[...T.r].sort((a,b)=>a.date.localeCompare(b.date)),ts=[...T.t].sort((a,b)=>a.date.localeCompare(b.date));
+  return `<h1>Expense &amp; Mileage Report — ${year}</h1>
+  <p>Receipts: <b>${money(T.spent)}</b> · Miles: <b>${T.miles.toFixed(1)}</b> × ${money(rate)} = <b>${money(T.ded)}</b> · Total: <b>${money(T.spent+T.ded)}</b></p>
+  <h2>By category</h2><table>${Object.entries(T.by).map(([k,v])=>`<tr><td>${esc(k)}</td><td class="r">${money(v)}</td></tr>`).join('')}</table>
+  <h2>Mileage log</h2><table><tr><th>Date</th><th>From → To</th><th>Purpose</th><th class="r">Miles</th></tr>${ts.map(x=>`<tr><td>${x.date}</td><td>${esc(x.from)} → ${esc(x.to)}</td><td>${esc(x.purpose)}</td><td class="r">${Number(x.miles).toFixed(1)}</td></tr>`).join('')}</table>
+  <h2>Receipts</h2>${rs.map(x=>`<div class="rimg"><b>${x.date} — ${esc(x.vendor)}</b> · ${esc(x.category)} · ${money(x.amount)}${x.notes?`<br>${esc(x.notes)}`:''}<br>${(x.photos||[]).map(p=>`<img src="${p}">`).join('')}</div>`).join('')}`;
+}
+
+// ----- receipts -----
+function vReceipts(){
+  const list=receipts.filter(x=>x.date.startsWith(year));
+  $('#main').innerHTML=`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px">
+    <button class="btn" id="add">+ Add receipt</button>${yearPicker()}</div></div>
+   <div class="card">${list.length?list.map(x=>`<div class="item" data-id="${x.id}">
+      ${(x.photos||[])[0]?`<img class="thumb" src="${x.photos[0]}">`:'<div class="thumb">🧾</div>'}
+      <div class="main"><div class="t">${esc(x.vendor)}</div><div class="s">${x.date} · ${esc(x.category)}${(x.photos||[]).length>1?` · ${x.photos.length} photos`:''}</div></div>
+      <div class="amt">${money(x.amount)}</div></div>`).join(''):'<p class="muted">No receipts for this year.</p>'}</div>`;
+  bindYear();$('#add').onclick=()=>receiptForm();
+  document.querySelectorAll('.item').forEach(e=>e.onclick=()=>receiptForm(receipts.find(r=>r.id===e.dataset.id)));
+}
+function receiptForm(r){
+  const isNew=!r;r=r||{id:uid(),date:today(),vendor:'',amount:'',category:settings().categories[0],notes:'',photos:[]};
+  inForm=true;
+  const photos=[...(r.photos||[])],pids=[...(r.pids||[])];
+  $('#main').innerHTML=`<div class="card"><h3 style="margin-top:0">${isNew?'New':'Edit'} receipt</h3>
+   <div class="row"><div><label>Date</label><input type="date" id="d" value="${r.date}"></div><div><label>Amount ($)</label><input type="number" step="0.01" inputmode="decimal" id="a" value="${r.amount}"></div></div>
+   <label>Vendor</label><input id="v" value="${esc(r.vendor)}">
+   <label>Category</label><select id="c">${settings().categories.map(c=>`<option ${c===r.category?'selected':''}>${esc(c)}</option>`).join('')}</select>
+   <label>Notes / business purpose</label><textarea id="n" rows="2">${esc(r.notes)}</textarea>
+   <label>Photos</label><div class="photos" id="ph"></div>
+   <div class="actions"><button class="btn sec" id="cam">📷 Take photo</button><button class="btn sec" id="up">🖼 Upload picture(s)</button></div>
+   <input type="file" id="f1" accept="image/*" capture="environment" class="hidden">
+   <input type="file" id="f2" accept="image/*" multiple class="hidden">
+   <div class="actions"><button class="btn" id="save">Save</button><button class="btn sec" id="cancel">Cancel</button>${isNew?'':'<button class="btn del" id="del">Delete</button>'}</div></div>`;
+  const drawP=()=>{$('#ph').innerHTML=photos.length?photos.map((p,i)=>`<div><img src="${p}" data-z="${i}"><button class="x" data-i="${i}">×</button></div>`).join(''):'<span class="muted">None yet</span>';
+    $('#ph').querySelectorAll('img').forEach(im=>im.onclick=()=>zoom(photos[im.dataset.z]));
+    $('#ph').querySelectorAll('.x').forEach(b=>b.onclick=()=>{photos.splice(b.dataset.i,1);pids.splice(b.dataset.i,1);drawP()});};
+  drawP();
+  const add=async fs=>{for(const f of fs){try{photos.push(await compress(f));pids.push(uid())}catch(e){alert(e.message)}}drawP()};
+  $('#cam').onclick=()=>$('#f1').click();$('#up').onclick=()=>$('#f2').click();
+  $('#f1').onchange=e=>add(e.target.files);$('#f2').onchange=e=>add(e.target.files);
+  $('#cancel').onclick=render;
+  if(!isNew)$('#del').onclick=async()=>{if(confirm('Delete this receipt?')){queueDel(`r_${r.id}.json`);(r.pids||[]).forEach(p=>queueDel(`p_${p}.jpg`));await rm('receipts',r.id);await load();render();autoSync()}};
+  $('#save').onclick=async()=>{
+    const a=parseFloat($('#a').value);if(!$('#d').value||isNaN(a)||!$('#v').value.trim()){alert('Date, vendor and amount are required.');return}
+    await put('receipts',{...r,id:r.id,date:$('#d').value,vendor:$('#v').value.trim(),amount:a,category:$('#c').value,notes:$('#n').value,photos,pids,updated:Date.now()});
+    (r.pids||[]).filter(p=>!pids.includes(p)).forEach(p=>queueDel(`p_${p}.jpg`));
+    year=$('#d').value.slice(0,4);await load();render();autoSync();};
+}
+
+// ----- mileage -----
+let gps=null;
+function vMileage(){
+  const list=trips.filter(x=>x.date.startsWith(year));
+  $('#main').innerHTML=`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
+    <div class="actions" style="margin:0"><button class="btn" id="add">+ Add trip</button><button class="btn sec" id="trk">📍 Track with GPS</button></div>${yearPicker()}</div></div>
+   <div class="card">${list.length?list.map(x=>`<div class="item" data-id="${x.id}"><div class="thumb">🚗</div>
+      <div class="main"><div class="t">${esc(x.from||'—')} → ${esc(x.to||'—')}</div><div class="s">${x.date} · ${esc(x.purpose)}</div></div>
+      <div class="amt">${Number(x.miles).toFixed(1)} mi</div></div>`).join(''):'<p class="muted">No trips for this year.</p>'}</div>`;
+  bindYear();$('#add').onclick=()=>tripForm();$('#trk').onclick=gpsView;
+  document.querySelectorAll('.item').forEach(e=>e.onclick=()=>tripForm(trips.find(t=>t.id===e.dataset.id)));
+}
+function tripForm(t,prefillMiles){
+  const isNew=!t||!t.id;t=t&&t.id?t:{id:uid(),date:today(),from:'',to:'',purpose:'',odoStart:'',odoEnd:'',miles:prefillMiles??'',...(t||{})};
+  inForm=true;
+  const lastOdo=trips.find(x=>x.odoEnd)?.odoEnd??'';
+  $('#main').innerHTML=`<div class="card"><h3 style="margin-top:0">${isNew?'New':'Edit'} trip</h3>
+   <label>Date</label><input type="date" id="d" value="${t.date}">
+   <div class="row"><div><label>From</label><input id="f" value="${esc(t.from)}"></div><div><label>To</label><input id="t" value="${esc(t.to)}"></div></div>
+   <label>Business purpose</label><input id="p" value="${esc(t.purpose)}">
+   <div class="row"><div><label>Odometer start (optional)</label><input type="number" step="0.1" inputmode="decimal" id="os" value="${t.odoStart||(isNew?lastOdo:'')}"></div><div><label>Odometer end (optional)</label><input type="number" step="0.1" inputmode="decimal" id="oe" value="${t.odoEnd}"></div></div>
+   <label>Miles <span class="muted">(auto-filled from odometer, or type directly)</span></label><input type="number" step="0.1" inputmode="decimal" id="m" value="${t.miles}">
+   <div class="actions"><button class="btn" id="save">Save</button><button class="btn sec" id="cancel">Cancel</button>${isNew?'':'<button class="btn del" id="del">Delete</button>'}</div></div>`;
+  const calc=()=>{const s=parseFloat($('#os').value),e=parseFloat($('#oe').value);if(!isNaN(s)&&!isNaN(e)&&e>=s)$('#m').value=(e-s).toFixed(1)};
+  $('#os').oninput=calc;$('#oe').oninput=calc;$('#cancel').onclick=render;
+  if(!isNew)$('#del').onclick=async()=>{if(confirm('Delete this trip?')){queueDel(`t_${t.id}.json`);await rm('trips',t.id);await load();render();autoSync()}};
+  $('#save').onclick=async()=>{const m=parseFloat($('#m').value);if(!$('#d').value||isNaN(m)||m<=0){alert('Date and miles are required.');return}
+    const os=parseFloat($('#os').value),oe=parseFloat($('#oe').value);
+    await put('trips',{...t,id:t.id,date:$('#d').value,from:$('#f').value.trim(),to:$('#t').value.trim(),purpose:$('#p').value.trim(),odoStart:isNaN(os)?null:os,odoEnd:isNaN(oe)?null:oe,miles:m,updated:Date.now()});
+    year=$('#d').value.slice(0,4);await load();render();autoSync();};
+}
+// GPS tracking
+function hav(a,b){const R=3958.8,r=Math.PI/180,dLa=(b.lat-a.lat)*r,dLo=(b.lon-a.lon)*r;
+  const x=Math.sin(dLa/2)**2+Math.cos(a.lat*r)*Math.cos(b.lat*r)*Math.sin(dLo/2)**2;return 2*R*Math.asin(Math.sqrt(x));}
+function gpsView(){inForm=true;
+  if(!navigator.geolocation){alert('GPS is not available in this browser.');return}
+  $('#main').innerHTML=`<div class="card gps"><h3 style="margin-top:0">GPS trip tracker</h3>
+   <div class="big" id="gm">0.0 mi</div><div class="muted" id="gs">Ready</div>
+   <div class="actions" style="justify-content:center"><button class="btn" id="go">Start</button><button class="btn sec" id="back">Back</button></div>
+   <p class="muted">Keep this screen open while driving — browsers pause tracking when the screen is off. GPS needs https (or localhost). For long trips, odometer entry is more reliable.</p></div>`;
+  $('#back').onclick=()=>{if(gps){navigator.geolocation.clearWatch(gps.id);gps=null}render()};
+  $('#go').onclick=()=>{
+    if(!gps){
+      gps={dist:0,last:null,wake:null};
+      navigator.wakeLock?.request('screen').then(w=>gps&&(gps.wake=w)).catch(()=>{});
+      gps.id=navigator.geolocation.watchPosition(p=>{
+        if(p.coords.accuracy>50){$('#gs').textContent='Waiting for better signal…';return}
+        const c={lat:p.coords.latitude,lon:p.coords.longitude};
+        if(gps.last){const d=hav(gps.last,c);if(d>0.01){gps.dist+=d;gps.last=c}}else gps.last=c;
+        $('#gm').textContent=gps.dist.toFixed(1)+' mi';$('#gs').textContent='Tracking…';
+      },e=>{$('#gs').textContent='GPS unavailable here ('+e.message+'). Use odometer or manual entry.'},{enableHighAccuracy:true,maximumAge:0});
+      $('#go').textContent='Stop & save';$('#gs').textContent='Starting…';
+    }else{
+      navigator.geolocation.clearWatch(gps.id);gps.wake?.release?.();const m=Math.round(gps.dist*10)/10;gps=null;
+      tripForm(null,m);
+    }};
+}
+
+// ----- settings -----
+function vSettings(){
+  const s=settings();
+  const g=GS();
+  $('#main').innerHTML=`<div class="card"><h3 style="margin-top:0">Google Drive sync</h3>
+   <p class="muted">Saves every receipt, photo and trip to a “Receipt &amp; Mileage Tracker” folder in the Google Drive of <b>${EMAIL}</b>. Syncs automatically after each change and when you open the app, so your phone and computer stay matched.</p>
+   <label>Google OAuth client ID (see setup steps)</label><input id="cid" value="${esc(g.cid||'')}" placeholder="1234567890-abc….apps.googleusercontent.com" autocapitalize="off" autocorrect="off">
+   <div class="actions"><button class="btn" id="gc">${g.on?'Sync now':'Connect &amp; sync'}</button><button class="btn del" id="gd">Disconnect</button></div>
+   <p class="muted" id="gstat"></p></div>
+  <div class="card"><h3 style="margin-top:0">Settings</h3>
+   <label>Mileage rate ($ per mile) — check the current IRS standard rate</label><input type="number" step="0.001" id="rate" value="${s.rate}">
+   <label>Categories (one per line)</label><textarea id="cats" rows="8">${esc(s.categories.join('\n'))}</textarea>
+   <div class="actions"><button class="btn" id="ss">Save settings</button></div></div>
+  <div class="card"><h3 style="margin-top:0">Backup &amp; restore</h3>
+   <p class="muted">Data is stored only in this browser. Back up regularly — clearing browser data deletes it. To move data to another device, export here and import there.</p>
+   <div class="actions"><button class="btn" id="bk">Download backup (.json)</button><button class="btn sec" id="rs">Restore from backup…</button></div>
+   <input type="file" id="rf" accept=".json,application/json" class="hidden"></div>`;
+  updateStatus();
+  $('#gc').onclick=()=>{const c=$('#cid').value.trim();if(!c){alert('Paste your Google client ID first.');return}setG({cid:c});syncNow(true)};
+  $('#gd').onclick=()=>{try{if(tok)google.accounts.oauth2.revoke(tok)}catch(e){}tok=null;tokExp=0;syncErr='';setG({on:0});vSettings()};
+  $('#ss').onclick=()=>{const r=parseFloat($('#rate').value),c=$('#cats').value.split('\n').map(x=>x.trim()).filter(Boolean);
+    if(isNaN(r)||!c.length){alert('Enter a valid rate and at least one category.');return}saveSettings({rate:r,categories:c});alert('Saved.')};
+  $('#bk').onclick=()=>download(`expense-backup-${today()}.json`,JSON.stringify({v:1,settings:settings(),receipts,trips}),'application/json');
+  $('#rs').onclick=()=>$('#rf').click();
+  $('#rf').onchange=async e=>{const f=e.target.files[0];if(!f)return;
+    try{const d=JSON.parse(await f.text());if(!Array.isArray(d.receipts)||!Array.isArray(d.trips))throw 0;
+      if(!confirm(`Import ${d.receipts.length} receipts and ${d.trips.length} trips? Matching entries are overwritten; others are kept.`))return;
+      for(const r of d.receipts)await put('receipts',{...r,_s:undefined,updated:Date.now()});for(const t of d.trips)await put('trips',{...t,_s:undefined,updated:Date.now()});
+      if(d.settings)saveSettings(d.settings);await load();render();autoSync();alert('Restored.');
+    }catch(x){alert('That file is not a valid backup.')}};
+}
+
+// ---------- Google Drive sync ----------
+const EMAIL='roanoketechconsultants@gmail.com',API='https://www.googleapis.com/drive/v3',UP='https://www.googleapis.com/upload/drive/v3';
+const GS=()=>{try{return JSON.parse(localStorage.getItem('et-g')||'{}')}catch(e){return {}}};
+const setG=o=>localStorage.setItem('et-g',JSON.stringify({...GS(),...o}));
+function queueDel(n){const l=JSON.parse(localStorage.getItem('et-del')||'[]');if(!l.includes(n)){l.push(n);localStorage.setItem('et-del',JSON.stringify(l))}}
+let tok=null,tokExp=0,syncing=false,again=false,syncErr='';
+
+function statusText(){const g=GS();if(!g.cid)return '☁ Set up sync';if(!g.on)return '☁ Connect';if(syncing)return '☁ Syncing…';if(syncErr)return '☁ Tap to retry';
+  return '☁ Synced'+(g.last?' '+new Date(g.last).toLocaleTimeString([],{hour:'numeric',minute:'2-digit'}):'');}
+function updateStatus(){const b=$('#syncbtn');if(b)b.textContent=statusText();const s=$('#gstat');if(s)s.textContent=syncErr||statusText();}
+$('#syncbtn').onclick=()=>{if(!GS().cid){view='settings';render();return}syncNow(true)};
+
+function getToken(interactive){return new Promise((res,rej)=>{
+  if(tok&&Date.now()<tokExp-60000)return res(tok);
+  const cid=GS().cid;if(!cid)return rej(new Error('Enter your Google client ID in Settings first.'));
+  if(!window.google?.accounts?.oauth2)return rej(new Error('Google sign-in did not load. Check your internet connection.'));
+  const c=google.accounts.oauth2.initTokenClient({client_id:cid,scope:'https://www.googleapis.com/auth/drive.file',hint:EMAIL,
+    callback:r=>{if(r.error)return rej(new Error(r.error_description||r.error));tok=r.access_token;tokExp=Date.now()+r.expires_in*1000;res(tok)},
+    error_callback:e=>rej(new Error(e.type||'sign-in cancelled'))});
+  c.requestAccessToken({prompt:interactive?'':'none'});
+});}
+async function api(url,opt={}){
+  const r=await fetch(url,{...opt,headers:{...(opt.headers||{}),Authorization:'Bearer '+tok}});
+  if(!r.ok){throw new Error('Drive error '+r.status+': '+(await r.text()).slice(0,160))}return r;}
+async function checkAccount(){
+  const j=await (await api(`${API}/about?fields=user(emailAddress)`)).json(),e=(j.user?.emailAddress||'').toLowerCase();
+  if(e!==EMAIL){try{google.accounts.oauth2.revoke(tok)}catch(x){}tok=null;tokExp=0;setG({on:0});throw new Error(`You signed in as ${e}. This app saves to ${EMAIL} — tap Connect and pick that account.`)}}
+async function ensureFolder(){
+  let id=GS().folder;
+  if(id){try{const j=await (await api(`${API}/files/${id}?fields=id,trashed`)).json();if(!j.trashed)return id}catch(e){}}
+  const q=encodeURIComponent("mimeType='application/vnd.google-apps.folder' and name='Receipt & Mileage Tracker' and trashed=false");
+  const j=await (await api(`${API}/files?q=${q}&fields=files(id)`)).json();
+  if(j.files[0])id=j.files[0].id;
+  else id=(await (await api(`${API}/files?fields=id`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'Receipt & Mileage Tracker',mimeType:'application/vnd.google-apps.folder'})})).json()).id;
+  setG({folder:id});return id;}
+async function listAll(folder){let out=[],pt='';
+  do{const q=encodeURIComponent(`'${folder}' in parents and trashed=false`);
+    const j=await (await api(`${API}/files?q=${q}&pageSize=1000&fields=nextPageToken,files(id,name,appProperties)${pt?'&pageToken='+pt:''}`)).json();
+    out=out.concat(j.files);pt=j.nextPageToken||'';}while(pt);return out;}
+async function upload(folder,name,blob,mime,props,existingId){
+  const meta={name,appProperties:props||{}};if(!existingId)meta.parents=[folder];
+  const b='b'+uid();
+  const body=new Blob([`--${b}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${b}\r\nContent-Type: ${mime}\r\n\r\n`,blob,`\r\n--${b}--`]);
+  const url=`${UP}/files${existingId?'/'+existingId:''}?uploadType=multipart&fields=id`;
+  return (await api(url,{method:existingId?'PATCH':'POST',headers:{'Content-Type':'multipart/related; boundary='+b},body})).json();}
+const toBlob=u=>fetch(u).then(r=>r.blob());
+const toURL=b=>new Promise((res,rej)=>{const f=new FileReader();f.onload=()=>res(f.result);f.onerror=rej;f.readAsDataURL(b)});
+
+async function pull(store,f,byName){
+  const j=await (await api(`${API}/files/${f.id}?alt=media`)).json();
+  const old=(await req(tx(store).get(j.id)))||{};let rec={...j,_s:j.updated};
+  if(store==='receipts'){const ph=[],pp=[];
+    for(const p of j.pids||[]){const i=(old.pids||[]).indexOf(p);
+      if(i>=0&&old.photos?.[i]){ph.push(old.photos[i]);pp.push(p);continue}
+      const pf=byName.get(`p_${p}.jpg`);if(!pf)continue;
+      ph.push(await toURL(await (await api(`${API}/files/${pf.id}?alt=media`)).blob()));pp.push(p);}
+    rec.photos=ph;rec.pids=pp;}
+  await put(store,rec);}
+async function push(store,pre,rec,folder,byName,f){
+  if(store==='receipts')for(let i=0;i<rec.pids.length;i++){const n=`p_${rec.pids[i]}.jpg`;
+    if(!byName.has(n)){const r=await upload(folder,n,await toBlob(rec.photos[i]),'image/jpeg',{});byName.set(n,{id:r.id,name:n})}}
+  const {photos,_s,...meta}=rec;
+  await upload(folder,`${pre}${rec.id}.json`,new Blob([JSON.stringify(meta)],{type:'application/json'}),'application/json',{updated:String(rec.updated)},f?.id);
+  await put(store,{...rec,_s:rec.updated});}
+
+async function syncNow(interactive){
+  if(syncing){again=true;return}
+  syncing=true;syncErr='';updateStatus();
+  try{
+    await getToken(interactive);await checkAccount();setG({on:1});
+    const folder=await ensureFolder(),byName=new Map((await listAll(folder)).map(f=>[f.name,f]));
+    for(const n of JSON.parse(localStorage.getItem('et-del')||'[]')){const f=byName.get(n);
+      if(f){await api(`${API}/files/${f.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({trashed:true})});byName.delete(n)}}
+    localStorage.setItem('et-del','[]');
+    for(const [store,pre] of [['receipts','r_'],['trips','t_']]){
+      const seen=new Set();
+      for(const rec of await all(store)){
+        const name=`${pre}${rec.id}.json`,f=byName.get(name);seen.add(name);
+        const ru=f?Number(f.appProperties?.updated||0):0;
+        if(f&&ru>rec.updated)await pull(store,f,byName);
+        else if(!f&&rec._s)await rm(store,rec.id);
+        else if(!f||rec.updated>ru)await push(store,pre,rec,folder,byName,f);}
+      for(const [name,f] of [...byName])if(name.startsWith(pre)&&name.endsWith('.json')&&!seen.has(name))await pull(store,f,byName);}
+    setG({last:Date.now()});await load();
+  }catch(e){syncErr=interactive?e.message:(/Drive error|Enter your|did not load|You signed/.test(e.message)?e.message:'Tap ☁ to sign in to Google again.');}
+  syncing=false;updateStatus();if(!inForm&&!syncErr)render();
+  if(again){again=false;syncNow(false)}
+}
+function autoSync(){const g=GS();if(g.cid&&g.on&&navigator.onLine)syncNow(false)}
+document.addEventListener('visibilitychange',()=>{if(!document.hidden)autoSync()});
+window.addEventListener('online',autoSync);
+
+// ---------- boot ----------
+openDB().then(load).then(render).then(autoSync).catch(e=>{$('#main').innerHTML='<div class="card">Storage unavailable: '+esc(e.message||e)+'</div>'});
+navigator.storage?.persist?.();
+</script>
+</body>
+</html>
