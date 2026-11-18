@@ -90,7 +90,7 @@ const put=(s,o)=>req(tx(s,'readwrite').put(o));
 const rm=(s,id)=>req(tx(s,'readwrite').delete(id));
 const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
 
-const DEF={rate:0.70,categories:['Meals','Supplies','Fuel','Travel','Software','Equipment','Advertising','Utilities','Other']};
+const DEF={rate:0.70,autoscan:true,categories:['Meals','Supplies','Fuel','Travel','Software','Equipment','Advertising','Utilities','Other']};
 const settings=()=>{try{return Object.assign({},DEF,JSON.parse(localStorage.getItem('et-settings')||'{}'))}catch(e){return {...DEF}}};
 const saveSettings=s=>localStorage.setItem('et-settings',JSON.stringify(s));
 
@@ -111,6 +111,66 @@ async function load(){
   receipts.sort((a,b)=>b.date.localeCompare(a.date));trips.sort((a,b)=>b.date.localeCompare(a.date));
 }
 function years(){const s=new Set([String(new Date().getFullYear())]);[...receipts,...trips].forEach(x=>s.add(x.date.slice(0,4)));return [...s].sort().reverse();}
+
+// ---- receipt parser ----
+const MONTHS={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
+function parseAmounts(line){const out=[];const re=/(?:^|[^\d])\$?\s?(\d{1,3}(?:,\d{3})+|\d+)[.,](\d{2})(?!\d)/g;let m;
+  while((m=re.exec(line)))out.push(parseFloat(m[1].replace(/,/g,'')+'.'+m[2]));return out;}
+function pickTotal(lines){
+  const good=/grand\s*total|amount\s*due|balance\s*due|total\s*due|\btotal\b/i,bad=/sub\s*-?\s*total|\btax\b|\btip\b|change|cash|tender|discount|saving|points|reward/i;
+  let best=null;
+  lines.forEach((l,i)=>{if(!good.test(l)||bad.test(l))return;
+    let a=parseAmounts(l);if(!a.length&&lines[i+1])a=parseAmounts(lines[i+1]);
+    if(a.length){const v=a[a.length-1];best=(best===null||/grand|due/i.test(l))?v:Math.max(best,v)}});
+  return best; // no guessing: if no clear total line is found, leave the amount for the user
+}
+function parseDate(text){
+  const now=new Date(),min=new Date(now.getFullYear()-3,0,1),max=new Date(now.getTime()+86400000);
+  const ok=(y,m,d)=>{if(y<100)y+=2000;if(!m)return null;const dt=new Date(y,m-1,d);if(dt.getMonth()!==m-1||dt.getDate()!==d||dt<min||dt>max)return null;
+    return `${y}-${String(m).padStart(2,'0')}-${String(d).padStart(2,'0')}`};
+  const mon='(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\\.?';
+  const pats=[
+    [/(\d{4})[-\/.](\d{1,2})[-\/.](\d{1,2})(?!\d)/g,a=>ok(+a[1],+a[2],+a[3])],
+    [/(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4}|\d{2})(?!\d)/g,a=>ok(+a[3],+a[1],+a[2])],
+    [new RegExp('\\b'+mon+'\\s+(\\d{1,2})(?:st|nd|rd|th)?,?\\s+(\\d{4})','gi'),a=>ok(+a[3],MONTHS[a[1].toLowerCase()],+a[2])],
+    [new RegExp('\\b(\\d{1,2})\\s+'+mon+',?\\s+(\\d{4})','gi'),a=>ok(+a[3],MONTHS[a[2].toLowerCase()],+a[1])]];
+  for(const [re,f] of pats){let a;while((a=re.exec(text))){const r=f(a);if(r)return r}}
+  return null;
+}
+function parseVendor(lines){
+  for(const raw of lines.slice(0,8)){
+    let l=raw.replace(/[^A-Za-z0-9&'.\- ]/g,' ').replace(/\s+/g,' ').trim();
+    const letters=(l.match(/[A-Za-z]/g)||[]).length;
+    if(letters<3||letters<l.length*0.5)continue;
+    const words=l.split(' ').filter(w=>/[A-Za-z]/.test(w)),longest=Math.max(0,...words.map(w=>w.replace(/[^A-Za-z]/g,'').length));
+    if(longest<4&&letters<7)continue;            // too short to trust
+    if(words.length>2&&letters/words.length<3)continue; // looks like OCR noise ("Sn an am")
+    if(/receipt|invoice|welcome|thank|order|\btel\b|phone|www\.|\.com|^\d{2,}\b|street|\bst\b|\bave\b|\broad\b|\brd\b|suite|store\s*#|cashier|server|table/i.test(l))continue;
+    if(l===l.toUpperCase())l=l.toLowerCase().replace(/\b[a-z]/g,c=>c.toUpperCase());
+    return l.slice(0,50);}
+  return '';
+}
+const CATMAP=[
+  ['Fuel',/\b(gas|fuel|shell|exxon|chevron|bp|mobil|sunoco|valero|texaco|marathon|speedway|unleaded|gallons?|pump)\b/i],
+  ['Meals',/\b(restaurant|cafe|coffee|grill|pizza|burger|diner|kitchen|bistro|taco|sushi|bbq|starbucks|mcdonald'?s?|subway|wendy'?s?|chipotle|dunkin)\b/i],
+  ['Travel',/\b(hotel|inn|motel|airlines?|airport|uber|lyft|parking|taxi|rental|amtrak|toll)\b/i],
+  ['Software',/\b(software|subscription|license|cloud|hosting|saas|domain)\b/i],
+  ['Supplies',/\b(office|staples|depot|supplies|paper|ink|toner|hardware|lowe'?s)\b/i],
+  ['Utilities',/\b(electric|water|internet|wireless|verizon|comcast|spectrum|utility)\b/i],
+  ['Advertising',/\b(advertis\w*|marketing|banner)\b/i]];
+function guessCategory(text,cats){for(const [c,re] of CATMAP)if(re.test(text)){const hit=cats.find(x=>x.toLowerCase()===c.toLowerCase());if(hit)return hit}return ''}
+function parseReceipt(text,cats){
+  const lines=text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+  return {vendor:parseVendor(lines),amount:pickTotal(lines),date:parseDate(text),category:guessCategory(text,cats||[])};
+}
+// ---- end parser ----
+// OCR runs in the browser (Tesseract.js); photos never leave the device.
+let tessLoad=null;
+function loadTess(){return tessLoad||(tessLoad=new Promise((res,rej)=>{const s=document.createElement('script');
+  s.src='https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.1/tesseract.min.js';
+  s.onload=()=>res(window.Tesseract);s.onerror=()=>{tessLoad=null;rej(new Error('Could not load the receipt reader. Check your internet connection.'))};document.head.appendChild(s)}))}
+async function ocr(dataUrl,onProgress){const T=await loadTess();
+  const r=await T.recognize(dataUrl,'eng',{logger:m=>{if(m.status==='recognizing text'&&onProgress)onProgress(Math.round(m.progress*100))}});return r.data.text}
 
 // compress image to JPEG data URL
 function compress(file,max=1600,q=0.75){return new Promise((res,rej)=>{
@@ -212,7 +272,8 @@ function receiptForm(r){
    <label>Category</label><select id="c">${settings().categories.map(c=>`<option ${c===r.category?'selected':''}>${esc(c)}</option>`).join('')}</select>
    <label>Notes / business purpose</label><textarea id="n" rows="2">${esc(r.notes)}</textarea>
    <label>Photos</label><div class="photos" id="ph"></div>
-   <div class="actions"><button class="btn sec" id="cam">📷 Take photo</button><button class="btn sec" id="up">🖼 Upload picture(s)</button></div>
+   <div class="actions"><button class="btn sec" id="cam">📷 Take photo</button><button class="btn sec" id="up">🖼 Upload picture(s)</button><button class="btn sec" id="scan">🔍 Read receipt</button></div>
+   <p class="muted" id="scanmsg" aria-live="polite"></p>
    <input type="file" id="f1" accept="image/*" capture="environment" class="hidden">
    <input type="file" id="f2" accept="image/*" multiple class="hidden">
    <div class="actions"><button class="btn" id="save">Save</button><button class="btn sec" id="cancel">Cancel</button>${isNew?'':'<button class="btn del" id="del">Delete</button>'}</div></div>`;
@@ -220,7 +281,24 @@ function receiptForm(r){
     $('#ph').querySelectorAll('img').forEach(im=>im.onclick=()=>zoom(photos[im.dataset.z]));
     $('#ph').querySelectorAll('.x').forEach(b=>b.onclick=()=>{photos.splice(b.dataset.i,1);pids.splice(b.dataset.i,1);drawP()});};
   drawP();
-  const add=async fs=>{for(const f of fs){try{photos.push(await compress(f));pids.push(uid())}catch(e){alert(e.message)}}drawP()};
+  const touched={};['d','a','v','c'].forEach(k=>['input','change'].forEach(ev=>$('#'+k).addEventListener(ev,()=>{touched[k]=true})));
+  let scanning=false;
+  const scan=async(idx,force)=>{
+    const msg=$('#scanmsg');
+    if(!photos[idx]){msg.textContent='Add a photo first.';return}
+    if(scanning)return;scanning=true;
+    try{msg.textContent='Reading receipt… 0%';
+      const text=await ocr(photos[idx],p=>{msg.textContent='Reading receipt… '+p+'%'});
+      const f=parseReceipt(text,settings().categories),got=[];
+      const set=(id,val,label)=>{if(val===''||val==null||(!force&&touched[id]))return;$('#'+id).value=val;got.push(label)};
+      set('v',f.vendor,f.vendor);set('a',f.amount!=null?f.amount.toFixed(2):'',f.amount!=null?money(f.amount):'');set('d',f.date,f.date);set('c',f.category,f.category);
+      msg.textContent=got.length?'Read from receipt: '+got.join(' · ')+'. Please check before saving.'+(f.amount==null?' The total was not clear, so enter the amount yourself.':''):'Couldn’t read this receipt clearly. Fill it in by hand, or retake the photo in good light.';
+    }catch(e){msg.textContent=e.message||'Could not read the receipt.'}
+    scanning=false;};
+  const add=async fs=>{const wasEmpty=photos.length===0;
+    for(const f of fs){try{photos.push(await compress(f));pids.push(uid())}catch(e){alert(e.message)}}
+    drawP();if(wasEmpty&&photos.length&&settings().autoscan!==false)scan(0,false)};
+  $('#scan').onclick=()=>scan(0,true);
   $('#cam').onclick=()=>$('#f1').click();$('#up').onclick=()=>$('#f2').click();
   $('#f1').onchange=e=>add(e.target.files);$('#f2').onchange=e=>add(e.target.files);
   $('#cancel').onclick=render;
@@ -302,6 +380,8 @@ function vSettings(){
   <div class="card"><h3 style="margin-top:0">Settings</h3>
    <label>Mileage rate ($ per mile) — check the current IRS standard rate</label><input type="number" step="0.001" id="rate" value="${s.rate}">
    <label>Categories (one per line)</label><textarea id="cats" rows="8">${esc(s.categories.join('\n'))}</textarea>
+   <label style="display:flex;gap:8px;align-items:center;margin-top:14px"><input type="checkbox" id="autoscan" style="width:auto" ${s.autoscan!==false?'checked':''}> Read receipts automatically when I add a photo</label>
+   <p class="muted">Reading happens on your device and photos are not sent anywhere. The first time, the app downloads some reading data (a few MB), so it needs internet once.</p>
    <div class="actions"><button class="btn" id="ss">Save settings</button></div></div>
   <div class="card"><h3 style="margin-top:0">Backup &amp; restore</h3>
    <p class="muted">Data is stored only in this browser. Back up regularly — clearing browser data deletes it. To move data to another device, export here and import there.</p>
@@ -311,7 +391,7 @@ function vSettings(){
   $('#gc').onclick=()=>{const c=$('#cid').value.trim();if(!c){alert('Paste your Google client ID first.');return}setG({cid:c});syncNow(true)};
   $('#gd').onclick=()=>{try{if(tok)google.accounts.oauth2.revoke(tok)}catch(e){}tok=null;tokExp=0;syncErr='';setG({on:0});vSettings()};
   $('#ss').onclick=()=>{const r=parseFloat($('#rate').value),c=$('#cats').value.split('\n').map(x=>x.trim()).filter(Boolean);
-    if(isNaN(r)||!c.length){alert('Enter a valid rate and at least one category.');return}saveSettings({rate:r,categories:c});alert('Saved.')};
+    if(isNaN(r)||!c.length){alert('Enter a valid rate and at least one category.');return}saveSettings({rate:r,categories:c,autoscan:$('#autoscan').checked});alert('Saved.')};
   $('#bk').onclick=()=>download(`expense-backup-${today()}.json`,JSON.stringify({v:1,settings:settings(),receipts,trips}),'application/json');
   $('#rs').onclick=()=>$('#rf').click();
   $('#rf').onchange=async e=>{const f=e.target.files[0];if(!f)return;
