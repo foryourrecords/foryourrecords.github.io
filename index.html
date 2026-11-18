@@ -437,7 +437,7 @@ function tripForm(t,prefillMiles){
    <div class="actions" style="margin-top:8px"><button type="button" class="btn sec" id="est">📍 Estimate miles from addresses</button></div>
    <p class="muted" id="estmsg" aria-live="polite">Looks up the driving route from “From” to “To” using OpenStreetMap, so those two addresses are sent to that service. It gives one-way miles; check the result.</p>
    <label>Route screenshot (optional)</label>
-   <div class="actions" style="margin-top:0"><button type="button" class="btn sec" id="gmap">🗺 Open route in Google Maps</button><button type="button" class="btn sec" id="rshot">📷 Add route screenshot</button><button type="button" class="btn sec" id="rread">🔍 Read miles from screenshot</button></div>
+   <div class="actions" style="margin-top:0"><button type="button" class="btn sec" id="gmap">🗺 Open route in Google Maps</button><button type="button" class="btn sec" id="rshot">📷 Add route screenshot</button><button type="button" class="btn sec" id="rread">🔍 Read miles from screenshot</button><button type="button" class="btn sec" id="rfill">📍 Fill From and To from screenshot</button></div>
    <input type="file" id="rf" accept="image/*" multiple class="hidden">
    <div class="photos" id="rph"></div>
    <p class="muted" id="rmsg" aria-live="polite">Type the From and To addresses, open the route in Google Maps, take a screenshot of the directions screen, and add it here. The app reads the distance from it and keeps the screenshot with the trip as a record.</p>
@@ -446,18 +446,39 @@ function tripForm(t,prefillMiles){
     $('#rph').querySelectorAll('img').forEach(im=>im.onclick=()=>zoom(photos[im.dataset.z]));
     $('#rph').querySelectorAll('.x').forEach(b=>b.onclick=()=>{photos.splice(b.dataset.i,1);pids.splice(b.dataset.i,1);drawShots()});};
   drawShots();
-  let reading=false;
+  let reading=false,cache={k:'',text:''};
+  // read the screenshot once and reuse the text for both the miles and the addresses
+  const shotText=async(onp)=>{const k=photos[0].length+':'+photos[0].slice(-60);if(cache.k===k)return cache.text;const text=await ocr(photos[0],onp);cache={k,text};return text};
+  const applyAddr=(text,overwrite)=>{
+    const a=parseRouteAddresses(text);if(!a.found||!a.to)return {ok:false};
+    const cf=$('#f').value.trim(),ct=$('#t').value.trim(),parts=[];
+    if(overwrite||!ct){$('#t').value=a.to;parts.push(`To: ${a.to}`)}
+    if(a.from&&(overwrite||!cf)){$('#f').value=a.from;parts.push(`From: ${a.from}`)}
+    let note='';if(a.fromIsMyLocation)note=' Google Maps used “Your location” as the start, so type your From address yourself.';
+    if(a.truncated.from||a.truncated.to)note+=' An address looked cut off in the screenshot, so check it.';
+    return {ok:true,parts,note,prev:(overwrite&&(cf||ct))?`Before: From ${cf||'(empty)'}, To ${ct||'(empty)'}.`:''};};
+  $('#rfill').onclick=async()=>{const msg=$('#rmsg');if(!photos.length){msg.textContent='Add a screenshot first.';return}
+    if(reading)return;reading=true;
+    try{msg.textContent='Reading the screenshot… 0%';
+      const text=await shotText(p=>{msg.textContent='Reading the screenshot… '+p+'%'});const r=applyAddr(text,true);
+      msg.textContent=r.ok?`Filled ${r.parts.join(' · ')}.${r.note} ${r.prev} Please check the addresses against the screenshot.`.replace(/\s+/g,' ').trim()
+        :'Could not find the From and To addresses. The screenshot needs to show the directions screen with both address boxes at the top.';
+    }catch(e){msg.textContent=e.message||'Could not read the screenshot.'}
+    reading=false;};
   const readShot=async(force)=>{
     const msg=$('#rmsg');if(!photos.length){msg.textContent='Add a screenshot first.';return}
     if(reading)return;reading=true;
     try{msg.textContent='Reading the screenshot… 0%';
-      const text=await ocr(photos[0],p=>{msg.textContent='Reading the screenshot… '+p+'%'});
+      const text=await shotText(p=>{msg.textContent='Reading the screenshot… '+p+'%'});
       const found=parseRouteMiles(text);
       if(!found.length){msg.textContent='Could not find a distance in that screenshot. Make sure the route distance (for example 12.4 mi) is visible, or type the miles yourself.';reading=false;return}
       const cur=parseFloat($('#m').value),f=found[0],others=found.slice(1).map(x=>x.raw).filter((v,i,a)=>a.indexOf(v)===i&&v!==f.raw);
       if(!(cur>0)||force){$('#m').value=f.miles;updateRT();
         msg.textContent=`Read ${f.raw} from the screenshot${others.length?` (other distances seen: ${others.join(', ')})`:''}. Please check it against the screenshot.`}
       else msg.textContent=`The screenshot shows ${f.raw}, but you already entered ${cur}. Tap “Read miles from screenshot” to use the screenshot's number.`;
+      // first screenshot on a blank trip: also fill the addresses (never overwrites anything you typed)
+      if(!force&&!$('#f').value.trim()&&!$('#t').value.trim()){const r=applyAddr(text,false);
+        if(r.ok)msg.textContent+=` Also filled ${r.parts.join(' · ')}.${r.note}`}
     }catch(e){msg.textContent=e.message||'Could not read the screenshot.'}
     reading=false;};
   $('#gmap').onclick=()=>{const to=$('#t').value.trim();if(!to){$('#rmsg').textContent='Fill in the “To” address first.';return}
@@ -506,6 +527,28 @@ function parseRouteMiles(text){
     if(/^k/i.test(m[3]))n=n/1.609344;
     if(n>0&&n<2000)out.push({miles:Math.round(n*10)/10,raw:m[0].replace(/\s+/g,' ').trim()});}
   return out;}
+// The From and To boxes at the top of a Google Maps directions screen (everything above the mode / time / distance row).
+// When Maps used "Your location" as the start, `from` is blank and fromIsMyLocation is true.
+function parseRouteAddresses(text){
+  const lines=String(text||'').split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+  const stop=lines.findIndex(l=>/^(driving|transit|walking|cycling|biking|rideshare|flights?|best route|fastest route|leave now|depart at|arrive by|options|steps)\b/i.test(l)
+    ||/\b\d+\s*(?:min|mins|hr|hrs|h)\b/i.test(l)||/\b\d+(?:[.,]\d+)?\s*(?:mi|miles|km)\b/i.test(l));
+  if(stop<1)return {found:false};
+  let mine=false,tFrom=false,tTo=false;
+  const labels=/^(your location|my location|current location|starting point|choose starting point.*|choose destination.*|destination|add stop|from|to|directions)$/i;
+  const cands=[];
+  for(const raw of lines.slice(0,stop)){
+    if((raw.match(/[A-Za-z]/g)||[]).length<4)continue;                       // status bar bits: 10:42, 5G, 89%
+    let s=raw.replace(/^[^A-Za-z0-9]+/,'').replace(/^[a-z]\s+(?=[A-Z0-9])/,'').replace(/[\s|]+$/,'');
+    const cut=/(…|\.\.\.)$/.test(s);if(cut)s=s.replace(/(…|\.\.\.)$/,'').trim();
+    if(/^(your|my|current) location$/i.test(s)){mine=true;continue}
+    if(!s||labels.test(s))continue;
+    cands.push({s,cut});}
+  if(!cands.length)return {found:false};
+  const to=cands[cands.length-1];
+  if(mine)return {found:true,from:'',to:to.s,fromIsMyLocation:true,truncated:{from:false,to:to.cut}};
+  if(cands.length>=2){const from=cands[cands.length-2];return {found:true,from:from.s,to:to.s,fromIsMyLocation:false,truncated:{from:from.cut,to:to.cut}}}
+  return {found:true,from:'',to:to.s,fromIsMyLocation:false,truncated:{from:false,to:to.cut}};}
 // ---- end route screenshot logic ----
 
 // ---- presets (pure) ----
