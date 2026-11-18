@@ -236,7 +236,7 @@ function csv(kind){
     download(`receipts-${year}.csv`,'Date,Vendor,Category,Client,Billable,Amount,Notes,Has Photo\n'+[...T.r].sort((a,b)=>a.date.localeCompare(b.date)).map(x=>[x.date,q(x.vendor),q(x.category),q(x.client),x.billable?'Yes':'',Number(x.amount).toFixed(2),q(x.notes),(x.photos||[]).length?'Yes':'No'].join(',')).join('\n'));
   }else{
     const rate=settings().rate;
-    download(`mileage-${year}.csv`,'Date,From,To,Purpose,Client,Billable,Odometer Start,Odometer End,Miles,Deduction,Has Screenshot\n'+[...T.t].sort((a,b)=>a.date.localeCompare(b.date)).map(x=>[x.date,q(x.from),q(x.to),q(x.purpose),q(x.client),x.billable?'Yes':'',x.odoStart??'',x.odoEnd??'',Number(x.miles).toFixed(1),(x.miles*rate).toFixed(2),(x.photos||[]).length?'Yes':'No'].join(',')).join('\n'));
+    download(`mileage-${year}.csv`,'Date,From,To,Purpose,Client,Billable,Odometer Start,Odometer End,Miles,Round Trip,Deduction,Has Screenshot\n'+[...T.t].sort((a,b)=>a.date.localeCompare(b.date)).map(x=>[x.date,q(x.from),q(x.to),q(x.purpose),q(x.client),x.billable?'Yes':'',x.odoStart??'',x.odoEnd??'',Number(x.miles).toFixed(1),x.roundTrip?'Yes':'',(x.miles*rate).toFixed(2),(x.photos||[]).length?'Yes':'No'].join(',')).join('\n'));
   }
 }
 async function report(){
@@ -305,9 +305,9 @@ function buildPackageFiles(){
   const n2=v=>Number(Number(v).toFixed(2));
   files.push({name:'Receipts.csv',data:csvOf([['Date','Vendor','Category','Client','Billable','Amount','Notes','Receipt file(s)'],
     ...rs.map(x=>[x.date,x.vendor,x.category,x.client||'',x.billable?'Yes':'',n2(x.amount),x.notes||'',(paths.get(x.id)||[]).join('; ')]),['','','TOTAL','','',n2(T.spent),'',''] ])});
-  files.push({name:'Mileage-Log.csv',data:csvOf([['Date','From','To','Business purpose','Client','Billable','Odometer start','Odometer end','Miles','Deduction ($)','Route screenshot(s)'],
-    ...ts.map(x=>[x.date,x.from||'',x.to||'',x.purpose||'',x.client||'',x.billable?'Yes':'',x.odoStart??'',x.odoEnd??'',Number(Number(x.miles).toFixed(1)),n2(x.miles*rate),(tpaths.get(x.id)||[]).join('; ')]),
-    ['','','','TOTAL','','','','',Number(T.miles.toFixed(1)),n2(T.ded),''] ])});
+  files.push({name:'Mileage-Log.csv',data:csvOf([['Date','From','To','Business purpose','Client','Billable','Odometer start','Odometer end','Miles','Round trip','Deduction ($)','Route screenshot(s)'],
+    ...ts.map(x=>[x.date,x.from||'',x.to||'',x.purpose||'',x.client||'',x.billable?'Yes':'',x.odoStart??'',x.odoEnd??'',Number(Number(x.miles).toFixed(1)),x.roundTrip?'Yes':'',n2(x.miles*rate),(tpaths.get(x.id)||[]).join('; ')]),
+    ['','','','TOTAL','','','','',Number(T.miles.toFixed(1)),'',n2(T.ded),''] ])});
   const bc=byClient(T.r,T.t,rate);
   files.push({name:'By-Client.csv',data:csvOf([['Client','Receipts ($)','Receipt count','Miles','Mileage ($)','Billable ($)','To invoice ($)','Total ($)'],
     ...bc.map(r=>[r.client||'(no client)',n2(r.receipts),r.rcount,Number(r.miles.toFixed(1)),n2(r.miles*rate),n2(r.billable),n2(r.toInvoice),n2(r.receipts+r.miles*rate)]),
@@ -413,7 +413,7 @@ function vMileage(){
   $('#main').innerHTML=`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
     <div class="actions" style="margin:0"><button class="btn" id="add">+ Add trip</button><button class="btn sec" id="trk">📍 GPS (screen on)</button><button class="btn sec" id="calb">📅 Trips from calendar</button></div>${yearPicker()}</div></div>
    <div class="card">${list.length?list.map(x=>`<div class="item" data-id="${x.id}">${(x.photos||[])[0]?`<img class="thumb" src="${x.photos[0]}" alt="Route screenshot">`:'<div class="thumb">🚗</div>'}
-      <div class="main"><div class="t">${esc(x.from||'—')} → ${esc(x.to||'—')}</div><div class="s">${x.date} · ${esc(x.purpose)}${x.client?` · ${esc(x.client)}`:''}${x.billable?(x.invoiced?' · invoiced':' · billable'):''}</div></div>
+      <div class="main"><div class="t">${esc(x.from||'—')} → ${esc(x.to||'—')}</div><div class="s">${x.date} · ${esc(x.purpose)}${x.roundTrip?' · round trip':''}${x.client?` · ${esc(x.client)}`:''}${x.billable?(x.invoiced?' · invoiced':' · billable'):''}</div></div>
       <div class="amt">${Number(x.miles).toFixed(1)} mi</div></div>`).join(''):'<p class="muted">No trips for this year.</p>'}</div>`;
   bindYear();$('#add').onclick=()=>tripForm();$('#trk').onclick=gpsView;$('#calb').onclick=calTrips;
   document.querySelectorAll('.item').forEach(e=>e.onclick=()=>tripForm(trips.find(t=>t.id===e.dataset.id)));
@@ -431,7 +431,9 @@ function tripForm(t,prefillMiles){
    <label style="display:flex;gap:8px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" id="bl" style="width:auto" ${t.billable?'checked':''}> Billable to this client</label>
    <label style="display:flex;gap:8px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" id="iv" style="width:auto" ${t.invoiced?'checked':''}> Already invoiced${t.invoiced?` (${esc(t.invoiced)})`:''}</label>
    <div class="row"><div><label>Odometer start (optional)</label><input type="number" step="0.1" inputmode="decimal" id="os" value="${t.odoStart||(isNew?lastOdo:'')}"></div><div><label>Odometer end (optional)</label><input type="number" step="0.1" inputmode="decimal" id="oe" value="${t.odoEnd}"></div></div>
-   <label>Miles <span class="muted">(auto-filled from odometer, or type directly)</span></label><input type="number" step="0.1" inputmode="decimal" id="m" value="${t.miles}">
+   <label>Miles <span class="muted">(one way, or the total if you use odometer readings)</span></label><input type="number" step="0.1" inputmode="decimal" id="m" value="${t.roundTrip&&t.miles?Math.round(t.miles/2*100)/100:t.miles}">
+   <label style="display:flex;gap:8px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" id="rt" style="width:auto" ${t.roundTrip?'checked':''}> Round trip (count the miles both ways)</label>
+   <p class="muted" id="rtmsg" aria-live="polite" style="margin-top:0"></p>
    <div class="actions" style="margin-top:8px"><button type="button" class="btn sec" id="est">📍 Estimate miles from addresses</button></div>
    <p class="muted" id="estmsg" aria-live="polite">Looks up the driving route from “From” to “To” using OpenStreetMap, so those two addresses are sent to that service. It gives one-way miles; check the result.</p>
    <label>Route screenshot (optional)</label>
@@ -453,7 +455,7 @@ function tripForm(t,prefillMiles){
       const found=parseRouteMiles(text);
       if(!found.length){msg.textContent='Could not find a distance in that screenshot. Make sure the route distance (for example 12.4 mi) is visible, or type the miles yourself.';reading=false;return}
       const cur=parseFloat($('#m').value),f=found[0],others=found.slice(1).map(x=>x.raw).filter((v,i,a)=>a.indexOf(v)===i&&v!==f.raw);
-      if(!(cur>0)||force){$('#m').value=f.miles;
+      if(!(cur>0)||force){$('#m').value=f.miles;updateRT();
         msg.textContent=`Read ${f.raw} from the screenshot${others.length?` (other distances seen: ${others.join(', ')})`:''}. Please check it against the screenshot.`}
       else msg.textContent=`The screenshot shows ${f.raw}, but you already entered ${cur}. Tap “Read miles from screenshot” to use the screenshot's number.`;
     }catch(e){msg.textContent=e.message||'Could not read the screenshot.'}
@@ -466,20 +468,27 @@ function tripForm(t,prefillMiles){
     for(const f of e.target.files){try{photos.push(await compress(f,2200,0.8));pids.push(uid())}catch(x){alert(x.message)}}
     e.target.value='';drawShots();if(wasEmpty&&photos.length&&settings().autoscan!==false)readShot(false)};
   $('#rread').onclick=()=>readShot(true);
-  const calc=()=>{const s=parseFloat($('#os').value),e=parseFloat($('#oe').value);if(!isNaN(s)&&!isNaN(e)&&e>=s)$('#m').value=(e-s).toFixed(1)};
+  // Round trip: the Miles box holds the one-way distance; the saved total is doubled. Odometer readings already cover the whole drive.
+  const odoDrive=()=>{const s=parseFloat($('#os').value),e=parseFloat($('#oe').value);return !isNaN(s)&&!isNaN(e)&&e>s};
+  const updateRT=()=>{const od=odoDrive(),rt=$('#rt'),m=parseFloat($('#m').value);
+    rt.disabled=od;if(od)rt.checked=false;
+    $('#rtmsg').textContent=od?'Odometer readings already include the whole drive.':(rt.checked&&m>0?`Counted: ${Math.round(m*2*10)/10} mi (${m} each way)`:'')};
+  const calc=()=>{const s=parseFloat($('#os').value),e=parseFloat($('#oe').value);if(!isNaN(s)&&!isNaN(e)&&e>=s)$('#m').value=(e-s).toFixed(1);updateRT()};
   $('#os').oninput=calc;$('#oe').oninput=calc;$('#cancel').onclick=render;
+  $('#m').addEventListener('input',updateRT);$('#rt').addEventListener('change',updateRT);updateRT();
   $('#est').onclick=async()=>{
     const msg=$('#estmsg'),from=$('#f').value.trim(),to=$('#t').value.trim();
     if(!from||!to){msg.textContent='Fill in both “From” and “To” first.';return}
     $('#est').disabled=true;msg.textContent='Looking up the route…';
-    try{const r=await estimateMiles(from,to);$('#m').value=r.miles;
+    try{const r=await estimateMiles(from,to);$('#m').value=r.miles;updateRT();
       msg.textContent=`About ${r.miles} mi one way by road. Matched: ${r.fromName} → ${r.toName}. Please check it looks right.`}
     catch(e){msg.textContent=e.message||'Could not estimate the distance.'}
     $('#est').disabled=false;};
   if(!isNew)$('#del').onclick=async()=>{if(confirm('Delete this trip?')){queueDel(`t_${t.id}.json`);(t.pids||[]).forEach(p=>queueDel(`p_${p}.jpg`));await rm('trips',t.id);await load();render();autoSync()}};
-  $('#save').onclick=async()=>{const m=parseFloat($('#m').value);if(!$('#d').value||isNaN(m)||m<=0){alert('Date and miles are required.');return}
+  $('#save').onclick=async()=>{const one=parseFloat($('#m').value);if(!$('#d').value||isNaN(one)||one<=0){alert('Date and miles are required.');return}
+    const round=$('#rt').checked&&!$('#rt').disabled,m=round?Math.round(one*2*10)/10:one;
     const os=parseFloat($('#os').value),oe=parseFloat($('#oe').value);
-    await put('trips',{...t,id:t.id,date:$('#d').value,from:$('#f').value.trim(),to:$('#t').value.trim(),purpose:$('#p').value.trim(),client:canonClient($('#cl').value,clientNames()),billable:$('#bl').checked,invoiced:$('#iv').checked?(t.invoiced||today()):'',odoStart:isNaN(os)?null:os,odoEnd:isNaN(oe)?null:oe,miles:m,photos,pids,updated:Date.now()});
+    await put('trips',{...t,id:t.id,date:$('#d').value,from:$('#f').value.trim(),to:$('#t').value.trim(),purpose:$('#p').value.trim(),client:canonClient($('#cl').value,clientNames()),billable:$('#bl').checked,invoiced:$('#iv').checked?(t.invoiced||today()):'',odoStart:isNaN(os)?null:os,odoEnd:isNaN(oe)?null:oe,miles:m,roundTrip:round,photos,pids,updated:Date.now()});
     (t.pids||[]).filter(p=>!pids.includes(p)).forEach(p=>queueDel(`p_${p}.jpg`));
     year=$('#d').value.slice(0,4);await load();render();autoSync();};
 }
@@ -618,7 +627,7 @@ function statementBody(o){
   const contact=String(o.contact||'').split('\n').map(l=>esc(l.trim())).filter(Boolean).join('<br>');
   const period=o.from||o.to?`${esc(o.from||'start')} to ${esc(o.to||'today')}`:'All dates';
   const expTable=o.receipts.length?`<table><tr><th>Date</th><th>Description</th><th>Category</th><th class="r">Amount</th></tr>${o.receipts.map(x=>`<tr><td>${esc(x.date)}</td><td>${esc(x.vendor)}${x.notes?`<div class="n">${esc(x.notes)}</div>`:''}</td><td>${esc(x.category)}</td><td class="r">${money(x.amount)}</td></tr>`).join('')}</table>`:'<p class="n">No expenses on this statement.</p>';
-  const milTable=o.trips.length?`<table><tr><th>Date</th><th>Trip</th><th class="r">Miles</th><th class="r">Amount</th></tr>${T.lines.map(({t,amt})=>`<tr><td>${esc(t.date)}</td><td>${esc(t.from||'')}${t.from&&t.to?' → ':''}${esc(t.to||'')}${t.purpose?`<div class="n">${esc(t.purpose)}</div>`:''}</td><td class="r">${Number(t.miles).toFixed(1)}</td><td class="r">${money(amt)}</td></tr>`).join('')}</table><p class="n">Mileage billed at ${money(o.rate)} per mile.</p>`:'<p class="n">No mileage on this statement.</p>';
+  const milTable=o.trips.length?`<table><tr><th>Date</th><th>Trip</th><th class="r">Miles</th><th class="r">Amount</th></tr>${T.lines.map(({t,amt})=>`<tr><td>${esc(t.date)}</td><td>${esc(t.from||'')}${t.from&&t.to?' → ':''}${esc(t.to||'')}${t.roundTrip?' (round trip)':''}${t.purpose?`<div class="n">${esc(t.purpose)}</div>`:''}</td><td class="r">${Number(t.miles).toFixed(1)}</td><td class="r">${money(amt)}</td></tr>`).join('')}</table><p class="n">Mileage billed at ${money(o.rate)} per mile.</p>`:'<p class="n">No mileage on this statement.</p>';
   const photos=o.photos?o.receipts.filter(x=>(x.photos||[]).length).map(x=>`<div class="rc"><b>${esc(x.date)} · ${esc(x.vendor)} · ${money(x.amount)}</b>${x.photos.map(p=>`<img src="${p}" alt="Receipt">`).join('')}</div>`).join(''):'';
   return `<style>.stm{font:14px/1.45 system-ui,Segoe UI,Arial,sans-serif;color:#000;max-width:800px;margin:0 auto}.stm h1{font-size:24px;margin:0 0 12px}.stm h2{font-size:16px;margin:22px 0 6px}.stm table{width:100%;border-collapse:collapse}.stm td,.stm th{padding:6px 4px;border-bottom:1px solid #ccc;text-align:left;vertical-align:top}.stm .r{text-align:right;white-space:nowrap}.stm .n{color:#555;font-size:12px}.stm .meta{display:flex;gap:28px;flex-wrap:wrap;margin-bottom:8px}.stm .meta>div{min-width:180px}.stm .tot{width:auto;margin-left:auto;margin-top:14px}.stm .tot td{border:0;padding:3px 8px}.stm .grand td{font-weight:700;font-size:16px;border-top:2px solid #000}.stm .rc{break-inside:avoid;margin:14px 0}.stm .rc img{display:block;max-width:100%;max-height:480px;margin:6px 0}</style>
   <div class="stm"><h1>Expense statement</h1>
@@ -863,7 +872,7 @@ function drawSugg(sugg,home){
       const s=sugg[+card.dataset.i],m=parseFloat(card.querySelector('.sm').value);
       if(!(m>0)){alert(`Enter the miles for "${s.title}" on ${s.date}, or untick it.`);card.querySelector('.sm').focus();return}
       picks.push({id:uid(),date:s.date,from:card.querySelector('.sf').value.trim(),to:s.location,purpose:card.querySelector('.sp').value.trim(),
-        client:canonClient(card.querySelector('.sc').value,clientNames()),billable:card.querySelector('.sb').checked,odoStart:null,odoEnd:null,miles:Math.round(m*(card.querySelector('.sr').checked?2:1)*10)/10,evId:s.key,updated:Date.now()});
+        client:canonClient(card.querySelector('.sc').value,clientNames()),billable:card.querySelector('.sb').checked,odoStart:null,odoEnd:null,miles:Math.round(m*(card.querySelector('.sr').checked?2:1)*10)/10,roundTrip:card.querySelector('.sr').checked,evId:s.key,updated:Date.now()});
       pairs.push({client:picks[picks.length-1].client,emails:s.emails});}
     if(!picks.length){alert('Tick the trips you want to add.');return}
     for(const t of picks)await put('trips',t);
