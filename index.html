@@ -585,15 +585,47 @@ const normPlace=s=>String(s||'').toLowerCase().replace(/\s+/g,' ').trim();
 function eventsToSuggestions(items,calId,existingKeys,skippedKeys){
   return (items||[]).filter(e=>e&&e.status!=='cancelled'&&e.location&&e.start&&!(e.attendees||[]).some(a=>a.self&&a.responseStatus==='declined'))
     .map(e=>{const when=e.start.dateTime||e.start.date;
-      return {key:`${calId}|${e.id}|${when}`,date:when.slice(0,10),title:(e.summary||'(no title)').trim(),location:e.location.split('\n')[0].trim()}})
+      return {key:`${calId}|${e.id}|${when}`,date:when.slice(0,10),title:(e.summary||'(no title)').trim(),location:e.location.split('\n')[0].trim(),
+        emails:(e.attendees||[]).filter(a=>!a.self&&a.email&&!a.resource).map(a=>String(a.email).toLowerCase())}})
     .filter(s=>s.location&&!existingKeys.has(s.key)&&!skippedKeys.has(s.key));
 }
 // Pure: client (and billable flag) from the most recent saved trip to the same place.
 function knownClient(tripList,place){const t=[...tripList].sort((a,b)=>b.date.localeCompare(a.date)).find(t=>normPlace(t.to)===normPlace(place)&&t.client);return t?{client:t.client,billable:!!t.billable}:{client:'',billable:false}}
 // Pure: miles from the most recent saved trip to the same place, or ''.
 function knownMiles(tripList,place){const t=[...tripList].sort((a,b)=>b.date.localeCompare(a.date)).find(t=>normPlace(t.to)===normPlace(place)&&Number(t.miles)>0);return t?Number(t.miles):''}
+// ---- client matching (pure) ----
+const FREE_MAIL=new Set(['gmail.com','googlemail.com','outlook.com','hotmail.com','live.com','msn.com','yahoo.com','icloud.com','me.com','aol.com','proton.me','protonmail.com']);
+const emailDomain=e=>String(e||'').split('@')[1]||'';
+const reEscape=s=>String(s).replace(/[.*+?^${}()|[\]\\]/g,'\\$&');
+const hasWord=(text,w)=>new RegExp('(^|[^a-z0-9])'+reEscape(String(w).toLowerCase())+'([^a-z0-9]|$)').test(String(text).toLowerCase());
+const shortClient=c=>String(c).replace(/[\s,]+(corp|corporation|inc|incorporated|llc|ltd|limited|co|company|group|llp|lp|plc|pllc|pc)\.?$/i,'').trim();
+// "Acme Corp = acme, acmecorp.com, jane@partner.com" -> [{client, keys:[...]}]
+function parseRules(text){return String(text||'').split('\n').map(l=>l.trim()).filter(Boolean).map(l=>{const i=l.indexOf('=');if(i<1)return null;
+  return {client:l.slice(0,i).trim(),keys:l.slice(i+1).split(',').map(k=>k.trim()).filter(Boolean)}}).filter(r=>r&&r.client&&r.keys.length)}
+// Your own rules first, then client names that appear in the event title or location.
+function matchClient(ev,clients,rules){
+  const text=`${ev.title||''}\n${ev.location||''}`,emails=ev.emails||[],doms=emails.map(emailDomain).filter(Boolean);
+  for(const r of rules||[])for(const k of r.keys){const kl=k.toLowerCase();
+    if(kl.includes('@')){if(emails.includes(kl))return {client:canonClient(r.client,clients),why:`attendee ${k}`}}
+    else if(/^[^\s]+\.[a-z]{2,}$/.test(kl)){if(doms.some(d=>d===kl||d.endsWith('.'+kl)))return {client:canonClient(r.client,clients),why:`attendee at ${k}`}}
+    else if(hasWord(text,kl))return {client:canonClient(r.client,clients),why:`mentions “${k}”`};}
+  const list=[...(clients||[])].sort((a,b)=>b.length-a.length);
+  for(const c of list)if(c.length>=3&&hasWord(text,c))return {client:c,why:`mentions “${c}”`};
+  // "Beta LLC" is usually called just "Beta": drop company suffixes, but only when that leaves one unambiguous client.
+  const shorts=list.map(shortClient);
+  for(let i=0;i<list.length;i++){const sc=shorts[i];
+    if(sc.length>=3&&sc!==list[i]&&shorts.filter(x=>x.toLowerCase()===sc.toLowerCase()).length===1&&hasWord(text,sc))return {client:list[i],why:`mentions “${sc}”`}}
+  return null;}
+// Company email domains learned from trips you have already confirmed (personal email domains are ignored).
+function matchLearned(ev,learned){for(const d of (ev.emails||[]).map(emailDomain)){if(!d||FREE_MAIL.has(d))continue;
+  const k=Object.keys(learned||{}).find(k=>d===k||d.endsWith('.'+k));if(k)return {client:learned[k],why:`attendee at ${k}`}}return null}
+function learnDomains(learned,pairs){const out={...(learned||{})};for(const p of pairs||[]){if(!p.client)continue;
+  for(const e of p.emails||[]){const d=emailDomain(e);if(d&&!FREE_MAIL.has(d))out[d]=p.client}}return out}
+// Whether this client's most recent trip was billable (used as the default for a new trip).
+function clientBillableDefault(tripList,client){const t=[...tripList].sort((a,b)=>b.date.localeCompare(a.date)).find(t=>t.client===client);return t?!!t.billable:false}
 // ---- end calendar logic ----
 let ctok=null,ctokExp=0;
+const learnedDomains=()=>{try{return JSON.parse(localStorage.getItem('et-dom')||'{}')}catch(e){return {}}};
 function getCalToken(interactive){return new Promise((res,rej)=>{
   if(ctok&&Date.now()<ctokExp-60000)return res(ctok);
   const cid=GS().cid;if(!cid)return rej(new Error('Google sign-in is not set up.'));
@@ -636,7 +668,7 @@ function calTrips(){
       msg.textContent='Reading events…';
       const existing=new Set(trips.map(t=>t.evId).filter(Boolean)),skipped=skipKeys();let sugg=[];
       for(const id of ids){
-        const j=await calApi(`calendars/${encodeURIComponent(id)}/events?timeMin=${encodeURIComponent(min.toISOString())}&timeMax=${encodeURIComponent(max.toISOString())}&singleEvents=true&orderBy=startTime&maxResults=250&fields=items(id,summary,location,start,end,status,attendees(self,responseStatus))`);
+        const j=await calApi(`calendars/${encodeURIComponent(id)}/events?timeMin=${encodeURIComponent(min.toISOString())}&timeMax=${encodeURIComponent(max.toISOString())}&singleEvents=true&orderBy=startTime&maxResults=250&fields=items(id,summary,location,start,end,status,attendees(email,self,responseStatus,resource))`);
         sugg=sugg.concat(eventsToSuggestions(j.items,id,existing,skipped));}
       sugg.sort((a,b)=>a.date.localeCompare(b.date));
       msg.textContent=sugg.length?`${sugg.length} event${sugg.length>1?'s':''} with a location. Tick the ones that were business trips and check the miles.`:'No new events with a location in that range.';
@@ -646,16 +678,25 @@ function calTrips(){
 }
 function drawSugg(sugg,home){
   const box=$('#cres');
+  const names=clientNames(),rules=parseRules(settings().clientRules),learned=learnedDomains();
   box.innerHTML=clientDatalist()+sugg.map((s,i)=>{const km=knownMiles(trips,s.location),kc=knownClient(trips,s.location);
+    // client guess: your rules and client names, then the same place as an earlier trip, then learned company domains
+    const m1=matchClient(s,names,rules),m2=(!m1&&!kc.client)?matchLearned(s,learned):null;
+    let cli='',bill=false,why='';
+    if(m1){cli=m1.client;bill=clientBillableDefault(trips,cli);why=`Matched: ${m1.why}`}
+    else if(kc.client){cli=kc.client;bill=kc.billable;why='Same place as an earlier trip'}
+    else if(m2){cli=m2.client;bill=clientBillableDefault(trips,cli);why=`Matched: ${m2.why}`}
     return `<div class="card csug" data-i="${i}">
      <label style="display:flex;gap:8px;align-items:center;color:var(--text);margin:0;font-size:16px"><input type="checkbox" class="sk" style="width:auto" ${km?'checked':''}> <b>${esc(s.date)}</b> · ${esc(s.title)}</label>
      <div class="muted" style="margin-top:4px">${esc(s.location)}${km?` · last time: ${km} mi`:''}</div>
+     ${s.emails&&s.emails.length?`<div class="muted">With: ${esc(s.emails.slice(0,3).join(', '))}${s.emails.length>3?` +${s.emails.length-3} more`:''}</div>`:''}
      <div class="row"><div><label>From</label><input class="sf" value="${esc(home)}"></div><div><label>Miles</label><input class="sm" type="number" step="0.1" inputmode="decimal" value="${km}"></div></div>
      <div class="actions" style="margin-top:6px"><button class="btn sec sest">📍 Estimate miles</button></div>
      <p class="muted smsg" aria-live="polite"></p>
      <label>Purpose</label><input class="sp" value="${esc(s.title)}">
-     <div class="row"><div><label>Client (optional)</label><input class="sc" list="clients" value="${esc(kc.client)}" autocomplete="off"></div>
-       <div><label style="display:flex;gap:6px;align-items:center;margin-top:30px;color:var(--text);font-size:15px"><input type="checkbox" class="sb" style="width:auto" ${kc.billable?'checked':''}> Billable</label></div></div>
+     <div class="row"><div><label>Client (optional)</label><input class="sc" list="clients" value="${esc(cli)}" autocomplete="off"></div>
+       <div><label style="display:flex;gap:6px;align-items:center;margin-top:30px;color:var(--text);font-size:15px"><input type="checkbox" class="sb" style="width:auto" ${bill?'checked':''}> Billable</label></div></div>
+     ${why?`<div class="muted cwhy">${esc(why)}</div>`:''}
      <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" class="sr" style="width:auto"> Round trip (counts the miles twice)</label>
      <div class="actions"><button class="btn del sdel">Not a business trip</button></div></div>`}).join('')+
     (sugg.length?'<p class="muted">Estimates use OpenStreetMap and send the two addresses to that service when you tap an Estimate button. They are one-way driving miles, so tick “Round trip” if you came back the same way.</p><div class="actions"><button class="btn sec" id="cestall">📍 Estimate all missing miles</button><button class="btn" id="cadd">Add ticked trips</button></div><p class="muted" id="cestmsg" aria-live="polite"></p>':'');
@@ -679,15 +720,17 @@ function drawSugg(sugg,home){
     for(const c of todo){m.textContent=`Estimating ${n+fail+1} of ${todo.length}…`;(await estCard(c))?n++:fail++}
     m.textContent=`Estimated ${n} of ${todo.length}.`+(fail?' The rest need a street address in “From” or miles typed by hand.':' Please check each one.');b.disabled=false;};
   add.onclick=async()=>{
-    const picks=[];
+    const picks=[],pairs=[];
     for(const card of box.querySelectorAll('.csug')){
       if(!card.querySelector('.sk').checked)continue;
       const s=sugg[+card.dataset.i],m=parseFloat(card.querySelector('.sm').value);
       if(!(m>0)){alert(`Enter the miles for "${s.title}" on ${s.date}, or untick it.`);card.querySelector('.sm').focus();return}
       picks.push({id:uid(),date:s.date,from:card.querySelector('.sf').value.trim(),to:s.location,purpose:card.querySelector('.sp').value.trim(),
-        client:canonClient(card.querySelector('.sc').value,clientNames()),billable:card.querySelector('.sb').checked,odoStart:null,odoEnd:null,miles:Math.round(m*(card.querySelector('.sr').checked?2:1)*10)/10,evId:s.key,updated:Date.now()});}
+        client:canonClient(card.querySelector('.sc').value,clientNames()),billable:card.querySelector('.sb').checked,odoStart:null,odoEnd:null,miles:Math.round(m*(card.querySelector('.sr').checked?2:1)*10)/10,evId:s.key,updated:Date.now()});
+      pairs.push({client:picks[picks.length-1].client,emails:s.emails});}
     if(!picks.length){alert('Tick the trips you want to add.');return}
     for(const t of picks)await put('trips',t);
+    try{localStorage.setItem('et-dom',JSON.stringify(learnDomains(learnedDomains(),pairs)))}catch(e){}
     year=picks[picks.length-1].date.slice(0,4);await load();view='mileage';render();autoSync();};
 }
 
@@ -733,6 +776,8 @@ function vSettings(){
    <label>Clients (optional, one per line; clients you use also appear automatically)</label><textarea id="clist" rows="4">${esc((s.clients||[]).join('\n'))}</textarea>
    <label>Your business name (shown on client statements)</label><input id="bizn" value="${esc(s.bizName||'')}" placeholder="e.g. Roanoke Tech Consultants">
    <label>Address, email or phone for statements (one per line)</label><textarea id="bizc" rows="3">${esc(s.bizContact||'')}</textarea>
+   <label>Calendar matching rules (optional)</label><textarea id="crules" rows="3" placeholder="Acme Corp = acme, acmecorp.com&#10;Beta LLC = beta, jane@beta.com">${esc(s.clientRules||'')}</textarea>
+   <p class="muted">One client per line: the client name, “=”, then words or email addresses that identify it. Client names are matched automatically. The app also learns company email domains from trips you confirm.</p>
    <label style="display:flex;gap:8px;align-items:center;margin-top:14px"><input type="checkbox" id="autoscan" style="width:auto" ${s.autoscan!==false?'checked':''}> Read receipts automatically when I add a photo</label>
    <p class="muted">Reading happens on your device and photos are not sent anywhere. The first time, the app downloads some reading data (a few MB), so it needs internet once.</p>
    <div class="actions"><button class="btn" id="ss">Save settings</button></div></div>
@@ -744,7 +789,7 @@ function vSettings(){
   $('#gc').onclick=()=>{const c=$('#cid').value.trim();if(!c){alert('Paste your Google client ID first.');return}setG({cid:c});syncNow(true)};
   $('#gd').onclick=()=>{try{if(tok)google.accounts.oauth2.revoke(tok)}catch(e){}tok=null;tokExp=0;syncErr='';setG({on:0});vSettings()};
   $('#ss').onclick=()=>{const r=parseFloat($('#rate').value),c=$('#cats').value.split('\n').map(x=>x.trim()).filter(Boolean);
-    if(isNaN(r)||!c.length){alert('Enter a valid rate and at least one category.');return}saveSettings({...settings(),rate:r,categories:c,autoscan:$('#autoscan').checked,clients:$('#clist').value.split('\n').map(x=>x.trim()).filter(Boolean),bizName:$('#bizn').value.trim(),bizContact:$('#bizc').value.trim()});alert('Saved.')};
+    if(isNaN(r)||!c.length){alert('Enter a valid rate and at least one category.');return}saveSettings({...settings(),rate:r,categories:c,autoscan:$('#autoscan').checked,clients:$('#clist').value.split('\n').map(x=>x.trim()).filter(Boolean),bizName:$('#bizn').value.trim(),bizContact:$('#bizc').value.trim(),clientRules:$('#crules').value.trim()});alert('Saved.')};
   $('#bk').onclick=()=>download(`expense-backup-${today()}.json`,JSON.stringify({v:1,settings:settings(),receipts,trips}),'application/json');
   $('#rs').onclick=()=>$('#rf').click();
   $('#rf').onchange=async e=>{const f=e.target.files[0];if(!f)return;
