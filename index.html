@@ -212,6 +212,7 @@ function vSummary(){
    </div></div>
   <div class="card"><h3 style="margin-top:0">By category</h3>
    ${Object.keys(T.by).length?`<table>${Object.entries(T.by).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<tr><td>${esc(k)}</td><td class="r">${money(v)}</td></tr>`).join('')}</table>`:'<p class="muted">No receipts this year yet.</p>'}</div>
+  ${clientCard(T)}
   <div class="card"><h3 style="margin-top:0">Export ${year}</h3>
    <div class="actions"><button class="btn" id="pkg">📦 Accountant package (ZIP)</button></div>
    <p class="muted">One file for your accountant: summary, receipts and mileage spreadsheets, a printable report, and every receipt photo sorted by category.</p>
@@ -229,10 +230,10 @@ const q=v=>`"${String(v??'').replace(/"/g,'""')}"`;
 function csv(kind){
   const T=totals();
   if(kind==='receipts'){
-    download(`receipts-${year}.csv`,'Date,Vendor,Category,Amount,Notes,Has Photo\n'+[...T.r].sort((a,b)=>a.date.localeCompare(b.date)).map(x=>[x.date,q(x.vendor),q(x.category),Number(x.amount).toFixed(2),q(x.notes),(x.photos||[]).length?'Yes':'No'].join(',')).join('\n'));
+    download(`receipts-${year}.csv`,'Date,Vendor,Category,Client,Billable,Amount,Notes,Has Photo\n'+[...T.r].sort((a,b)=>a.date.localeCompare(b.date)).map(x=>[x.date,q(x.vendor),q(x.category),q(x.client),x.billable?'Yes':'',Number(x.amount).toFixed(2),q(x.notes),(x.photos||[]).length?'Yes':'No'].join(',')).join('\n'));
   }else{
     const rate=settings().rate;
-    download(`mileage-${year}.csv`,'Date,From,To,Purpose,Odometer Start,Odometer End,Miles,Deduction\n'+[...T.t].sort((a,b)=>a.date.localeCompare(b.date)).map(x=>[x.date,q(x.from),q(x.to),q(x.purpose),x.odoStart??'',x.odoEnd??'',Number(x.miles).toFixed(1),(x.miles*rate).toFixed(2)].join(',')).join('\n'));
+    download(`mileage-${year}.csv`,'Date,From,To,Purpose,Client,Billable,Odometer Start,Odometer End,Miles,Deduction\n'+[...T.t].sort((a,b)=>a.date.localeCompare(b.date)).map(x=>[x.date,q(x.from),q(x.to),q(x.purpose),q(x.client),x.billable?'Yes':'',x.odoStart??'',x.odoEnd??'',Number(x.miles).toFixed(1),(x.miles*rate).toFixed(2)].join(',')).join('\n'));
   }
 }
 async function report(){
@@ -292,11 +293,15 @@ function buildPackageFiles(){
   const cell=v=>typeof v==='number'?String(v):q(v);
   const csvOf=rows=>enc.encode('﻿'+rows.map(r=>r.map(cell).join(',')).join('\r\n')+'\r\n');
   const n2=v=>Number(Number(v).toFixed(2));
-  files.push({name:'Receipts.csv',data:csvOf([['Date','Vendor','Category','Amount','Notes','Receipt file(s)'],
-    ...rs.map(x=>[x.date,x.vendor,x.category,n2(x.amount),x.notes||'',(paths.get(x.id)||[]).join('; ')]),['','','TOTAL',n2(T.spent),'',''] ])});
-  files.push({name:'Mileage-Log.csv',data:csvOf([['Date','From','To','Business purpose','Odometer start','Odometer end','Miles','Deduction ($)'],
-    ...ts.map(x=>[x.date,x.from||'',x.to||'',x.purpose||'',x.odoStart??'',x.odoEnd??'',Number(Number(x.miles).toFixed(1)),n2(x.miles*rate)]),
-    ['','','','TOTAL','','',Number(T.miles.toFixed(1)),n2(T.ded)] ])});
+  files.push({name:'Receipts.csv',data:csvOf([['Date','Vendor','Category','Client','Billable','Amount','Notes','Receipt file(s)'],
+    ...rs.map(x=>[x.date,x.vendor,x.category,x.client||'',x.billable?'Yes':'',n2(x.amount),x.notes||'',(paths.get(x.id)||[]).join('; ')]),['','','TOTAL','','',n2(T.spent),'',''] ])});
+  files.push({name:'Mileage-Log.csv',data:csvOf([['Date','From','To','Business purpose','Client','Billable','Odometer start','Odometer end','Miles','Deduction ($)'],
+    ...ts.map(x=>[x.date,x.from||'',x.to||'',x.purpose||'',x.client||'',x.billable?'Yes':'',x.odoStart??'',x.odoEnd??'',Number(Number(x.miles).toFixed(1)),n2(x.miles*rate)]),
+    ['','','','TOTAL','','','','',Number(T.miles.toFixed(1)),n2(T.ded)] ])});
+  const bc=byClient(T.r,T.t,rate);
+  files.push({name:'By-Client.csv',data:csvOf([['Client','Receipts ($)','Receipt count','Miles','Mileage ($)','Billable ($)','Total ($)'],
+    ...bc.map(r=>[r.client||'(no client)',n2(r.receipts),r.rcount,Number(r.miles.toFixed(1)),n2(r.miles*rate),n2(r.billable),n2(r.receipts+r.miles*rate)]),
+    ['TOTAL',n2(T.spent),T.r.length,Number(T.miles.toFixed(1)),n2(T.ded),n2(bc.reduce((a,r)=>a+r.billable,0)),n2(T.spent+T.ded)] ])});
   files.push({name:'Summary.csv',data:csvOf([['Category','Total ($)'],
     ...Object.entries(T.by).sort((a,b)=>b[1]-a[1]).map(([k,v])=>[k,n2(v)]),
     ['Receipts total',n2(T.spent)],['',''],['Business miles',Number(T.miles.toFixed(1))],['Mileage rate ($ per mile)',rate],['Mileage deduction ($)',n2(T.ded)],['',''],['Total deductible ($)',n2(T.spent+T.ded)] ])});
@@ -307,6 +312,7 @@ function buildPackageFiles(){
 Generated ${today()}
 
 Summary.csv      Totals by category, mileage deduction and total deductible
+By-Client.csv    Receipts, mileage and the billable amount for each client
 Receipts.csv     Every receipt, with the matching photo file name
 Mileage-Log.csv  Every trip with odometer readings, miles and deduction
 Report.html      Printable report (open it, then Print > Save as PDF)
@@ -333,7 +339,7 @@ function vReceipts(){
     <button class="btn" id="add">+ Add receipt</button>${yearPicker()}</div></div>
    <div class="card">${list.length?list.map(x=>`<div class="item" data-id="${x.id}">
       ${(x.photos||[])[0]?`<img class="thumb" src="${x.photos[0]}">`:'<div class="thumb">🧾</div>'}
-      <div class="main"><div class="t">${esc(x.vendor)}</div><div class="s">${x.date} · ${esc(x.category)}${(x.photos||[]).length>1?` · ${x.photos.length} photos`:''}</div></div>
+      <div class="main"><div class="t">${esc(x.vendor)}</div><div class="s">${x.date} · ${esc(x.category)}${x.client?` · ${esc(x.client)}`:''}${x.billable?' · billable':''}${(x.photos||[]).length>1?` · ${x.photos.length} photos`:''}</div></div>
       <div class="amt">${money(x.amount)}</div></div>`).join(''):'<p class="muted">No receipts for this year.</p>'}</div>`;
   bindYear();$('#add').onclick=()=>receiptForm();
   document.querySelectorAll('.item').forEach(e=>e.onclick=()=>receiptForm(receipts.find(r=>r.id===e.dataset.id)));
@@ -346,6 +352,8 @@ function receiptForm(r){
    <div class="row"><div><label>Date</label><input type="date" id="d" value="${r.date}"></div><div><label>Amount ($)</label><input type="number" step="0.01" inputmode="decimal" id="a" value="${r.amount}"></div></div>
    <label>Vendor</label><input id="v" value="${esc(r.vendor)}">
    <label>Category</label><select id="c">${settings().categories.map(c=>`<option ${c===r.category?'selected':''}>${esc(c)}</option>`).join('')}</select>
+   <label>Client (optional)</label><input id="cl" list="clients" value="${esc(r.client||'')}" autocomplete="off" placeholder="e.g. Acme Corp">${clientDatalist()}
+   <label style="display:flex;gap:8px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" id="bl" style="width:auto" ${r.billable?'checked':''}> Billable to this client</label>
    <label>Notes / business purpose</label><textarea id="n" rows="2">${esc(r.notes)}</textarea>
    <label>Photos</label><div class="photos" id="ph"></div>
    <div class="actions"><button class="btn sec" id="cam">📷 Take photo</button><button class="btn sec" id="up">🖼 Upload picture(s)</button><button class="btn sec" id="scan">🔍 Read receipt</button></div>
@@ -381,7 +389,7 @@ function receiptForm(r){
   if(!isNew)$('#del').onclick=async()=>{if(confirm('Delete this receipt?')){queueDel(`r_${r.id}.json`);(r.pids||[]).forEach(p=>queueDel(`p_${p}.jpg`));await rm('receipts',r.id);await load();render();autoSync()}};
   $('#save').onclick=async()=>{
     const a=parseFloat($('#a').value);if(!$('#d').value||isNaN(a)||!$('#v').value.trim()){alert('Date, vendor and amount are required.');return}
-    await put('receipts',{...r,id:r.id,date:$('#d').value,vendor:$('#v').value.trim(),amount:a,category:$('#c').value,notes:$('#n').value,photos,pids,updated:Date.now()});
+    await put('receipts',{...r,id:r.id,date:$('#d').value,vendor:$('#v').value.trim(),amount:a,category:$('#c').value,client:canonClient($('#cl').value,clientNames()),billable:$('#bl').checked,notes:$('#n').value,photos,pids,updated:Date.now()});
     (r.pids||[]).filter(p=>!pids.includes(p)).forEach(p=>queueDel(`p_${p}.jpg`));
     year=$('#d').value.slice(0,4);await load();render();autoSync();};
 }
@@ -393,7 +401,7 @@ function vMileage(){
   $('#main').innerHTML=`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
     <div class="actions" style="margin:0"><button class="btn" id="add">+ Add trip</button><button class="btn sec" id="trk">📍 Track with GPS</button><button class="btn sec" id="calb">📅 Trips from calendar</button></div>${yearPicker()}</div></div>
    <div class="card">${list.length?list.map(x=>`<div class="item" data-id="${x.id}"><div class="thumb">🚗</div>
-      <div class="main"><div class="t">${esc(x.from||'—')} → ${esc(x.to||'—')}</div><div class="s">${x.date} · ${esc(x.purpose)}</div></div>
+      <div class="main"><div class="t">${esc(x.from||'—')} → ${esc(x.to||'—')}</div><div class="s">${x.date} · ${esc(x.purpose)}${x.client?` · ${esc(x.client)}`:''}${x.billable?' · billable':''}</div></div>
       <div class="amt">${Number(x.miles).toFixed(1)} mi</div></div>`).join(''):'<p class="muted">No trips for this year.</p>'}</div>`;
   bindYear();$('#add').onclick=()=>tripForm();$('#trk').onclick=gpsView;$('#calb').onclick=calTrips;
   document.querySelectorAll('.item').forEach(e=>e.onclick=()=>tripForm(trips.find(t=>t.id===e.dataset.id)));
@@ -406,6 +414,8 @@ function tripForm(t,prefillMiles){
    <label>Date</label><input type="date" id="d" value="${t.date}">
    <div class="row"><div><label>From</label><input id="f" value="${esc(t.from)}"></div><div><label>To</label><input id="t" value="${esc(t.to)}"></div></div>
    <label>Business purpose</label><input id="p" value="${esc(t.purpose)}">
+   <label>Client (optional)</label><input id="cl" list="clients" value="${esc(t.client||'')}" autocomplete="off" placeholder="e.g. Acme Corp">${clientDatalist()}
+   <label style="display:flex;gap:8px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" id="bl" style="width:auto" ${t.billable?'checked':''}> Billable to this client</label>
    <div class="row"><div><label>Odometer start (optional)</label><input type="number" step="0.1" inputmode="decimal" id="os" value="${t.odoStart||(isNew?lastOdo:'')}"></div><div><label>Odometer end (optional)</label><input type="number" step="0.1" inputmode="decimal" id="oe" value="${t.odoEnd}"></div></div>
    <label>Miles <span class="muted">(auto-filled from odometer, or type directly)</span></label><input type="number" step="0.1" inputmode="decimal" id="m" value="${t.miles}">
    <div class="actions" style="margin-top:8px"><button type="button" class="btn sec" id="est">📍 Estimate miles from addresses</button></div>
@@ -424,9 +434,30 @@ function tripForm(t,prefillMiles){
   if(!isNew)$('#del').onclick=async()=>{if(confirm('Delete this trip?')){queueDel(`t_${t.id}.json`);await rm('trips',t.id);await load();render();autoSync()}};
   $('#save').onclick=async()=>{const m=parseFloat($('#m').value);if(!$('#d').value||isNaN(m)||m<=0){alert('Date and miles are required.');return}
     const os=parseFloat($('#os').value),oe=parseFloat($('#oe').value);
-    await put('trips',{...t,id:t.id,date:$('#d').value,from:$('#f').value.trim(),to:$('#t').value.trim(),purpose:$('#p').value.trim(),odoStart:isNaN(os)?null:os,odoEnd:isNaN(oe)?null:oe,miles:m,updated:Date.now()});
+    await put('trips',{...t,id:t.id,date:$('#d').value,from:$('#f').value.trim(),to:$('#t').value.trim(),purpose:$('#p').value.trim(),client:canonClient($('#cl').value,clientNames()),billable:$('#bl').checked,odoStart:isNaN(os)?null:os,odoEnd:isNaN(oe)?null:oe,miles:m,updated:Date.now()});
     year=$('#d').value.slice(0,4);await load();render();autoSync();};
 }
+// ---- client logic ----
+// Snap a typed client name to an existing one, ignoring case and extra spaces.
+function canonClient(v,names){const t=String(v||'').replace(/\s+/g,' ').trim();if(!t)return '';const hit=(names||[]).find(n=>n.toLowerCase()===t.toLowerCase());return hit||t}
+// Totals per client for a set of receipts and trips. Items with no client are grouped last.
+function byClient(rs,ts,rate){
+  const m=new Map(),row=n=>{const k=n||'';if(!m.has(k))m.set(k,{client:k,receipts:0,rcount:0,miles:0,tcount:0,billable:0});return m.get(k)};
+  rs.forEach(x=>{const o=row(x.client);o.receipts+=Number(x.amount)||0;o.rcount++;if(x.billable)o.billable+=Number(x.amount)||0});
+  ts.forEach(x=>{const o=row(x.client);o.miles+=Number(x.miles)||0;o.tcount++;if(x.billable)o.billable+=(Number(x.miles)||0)*rate});
+  return [...m.values()].sort((a,b)=>((a.client==='')-(b.client===''))||((b.receipts+b.miles*rate)-(a.receipts+a.miles*rate)));
+}
+// ---- end client logic ----
+const clientNames=()=>{const s=new Set((settings().clients||[]).map(x=>String(x).trim()).filter(Boolean));[...receipts,...trips].forEach(x=>{if(x.client)s.add(x.client)});return [...s].sort((a,b)=>a.localeCompare(b))};
+const clientDatalist=()=>`<datalist id="clients">${clientNames().map(c=>`<option value="${esc(c)}">`).join('')}</datalist>`;
+function clientCard(T){
+  const rate=settings().rate,rows=byClient(T.r,T.t,rate);
+  if(!rows.length)return '';
+  return `<div class="card"><h3 style="margin-top:0">By client</h3>`+(rows.some(r=>r.client)?
+    `<div style="overflow-x:auto"><table><tr><th>Client</th><th class="r">Receipts</th><th class="r">Mileage</th><th class="r">Billable</th></tr>${rows.map(r=>`<tr><td>${esc(r.client||'No client')}</td><td class="r">${money(r.receipts)}</td><td class="r">${money(r.miles*rate)}<br><span class="muted">${r.miles.toFixed(1)} mi</span></td><td class="r">${money(r.billable)}</td></tr>`).join('')}</table></div><p class="muted">Billable counts only items marked billable. Mileage is miles × your rate.</p>`
+    :'<p class="muted">Add a client to your receipts and trips to see totals for each one here.</p>')+'</div>';
+}
+
 // ---- distance logic ----
 // Driving distance from OpenStreetMap services (Nominatim for addresses, OSRM for routes).
 // The two addresses are sent to those public services only when the user taps an Estimate button.
@@ -473,6 +504,8 @@ function eventsToSuggestions(items,calId,existingKeys,skippedKeys){
       return {key:`${calId}|${e.id}|${when}`,date:when.slice(0,10),title:(e.summary||'(no title)').trim(),location:e.location.split('\n')[0].trim()}})
     .filter(s=>s.location&&!existingKeys.has(s.key)&&!skippedKeys.has(s.key));
 }
+// Pure: client (and billable flag) from the most recent saved trip to the same place.
+function knownClient(tripList,place){const t=[...tripList].sort((a,b)=>b.date.localeCompare(a.date)).find(t=>normPlace(t.to)===normPlace(place)&&t.client);return t?{client:t.client,billable:!!t.billable}:{client:'',billable:false}}
 // Pure: miles from the most recent saved trip to the same place, or ''.
 function knownMiles(tripList,place){const t=[...tripList].sort((a,b)=>b.date.localeCompare(a.date)).find(t=>normPlace(t.to)===normPlace(place)&&Number(t.miles)>0);return t?Number(t.miles):''}
 // ---- end calendar logic ----
@@ -529,7 +562,7 @@ function calTrips(){
 }
 function drawSugg(sugg,home){
   const box=$('#cres');
-  box.innerHTML=sugg.map((s,i)=>{const km=knownMiles(trips,s.location);
+  box.innerHTML=clientDatalist()+sugg.map((s,i)=>{const km=knownMiles(trips,s.location),kc=knownClient(trips,s.location);
     return `<div class="card csug" data-i="${i}">
      <label style="display:flex;gap:8px;align-items:center;color:var(--text);margin:0;font-size:16px"><input type="checkbox" class="sk" style="width:auto" ${km?'checked':''}> <b>${esc(s.date)}</b> · ${esc(s.title)}</label>
      <div class="muted" style="margin-top:4px">${esc(s.location)}${km?` · last time: ${km} mi`:''}</div>
@@ -537,6 +570,8 @@ function drawSugg(sugg,home){
      <div class="actions" style="margin-top:6px"><button class="btn sec sest">📍 Estimate miles</button></div>
      <p class="muted smsg" aria-live="polite"></p>
      <label>Purpose</label><input class="sp" value="${esc(s.title)}">
+     <div class="row"><div><label>Client (optional)</label><input class="sc" list="clients" value="${esc(kc.client)}" autocomplete="off"></div>
+       <div><label style="display:flex;gap:6px;align-items:center;margin-top:30px;color:var(--text);font-size:15px"><input type="checkbox" class="sb" style="width:auto" ${kc.billable?'checked':''}> Billable</label></div></div>
      <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" class="sr" style="width:auto"> Round trip (counts the miles twice)</label>
      <div class="actions"><button class="btn del sdel">Not a business trip</button></div></div>`}).join('')+
     (sugg.length?'<p class="muted">Estimates use OpenStreetMap and send the two addresses to that service when you tap an Estimate button. They are one-way driving miles, so tick “Round trip” if you came back the same way.</p><div class="actions"><button class="btn sec" id="cestall">📍 Estimate all missing miles</button><button class="btn" id="cadd">Add ticked trips</button></div><p class="muted" id="cestmsg" aria-live="polite"></p>':'');
@@ -566,7 +601,7 @@ function drawSugg(sugg,home){
       const s=sugg[+card.dataset.i],m=parseFloat(card.querySelector('.sm').value);
       if(!(m>0)){alert(`Enter the miles for "${s.title}" on ${s.date}, or untick it.`);card.querySelector('.sm').focus();return}
       picks.push({id:uid(),date:s.date,from:card.querySelector('.sf').value.trim(),to:s.location,purpose:card.querySelector('.sp').value.trim(),
-        odoStart:null,odoEnd:null,miles:Math.round(m*(card.querySelector('.sr').checked?2:1)*10)/10,evId:s.key,updated:Date.now()});}
+        client:canonClient(card.querySelector('.sc').value,clientNames()),billable:card.querySelector('.sb').checked,odoStart:null,odoEnd:null,miles:Math.round(m*(card.querySelector('.sr').checked?2:1)*10)/10,evId:s.key,updated:Date.now()});}
     if(!picks.length){alert('Tick the trips you want to add.');return}
     for(const t of picks)await put('trips',t);
     year=picks[picks.length-1].date.slice(0,4);await load();view='mileage';render();autoSync();};
@@ -611,6 +646,7 @@ function vSettings(){
   <div class="card"><h3 style="margin-top:0">Settings</h3>
    <label>Mileage rate ($ per mile) — check the current IRS standard rate</label><input type="number" step="0.001" id="rate" value="${s.rate}">
    <label>Categories (one per line)</label><textarea id="cats" rows="8">${esc(s.categories.join('\n'))}</textarea>
+   <label>Clients (optional, one per line; clients you use also appear automatically)</label><textarea id="clist" rows="4">${esc((s.clients||[]).join('\n'))}</textarea>
    <label style="display:flex;gap:8px;align-items:center;margin-top:14px"><input type="checkbox" id="autoscan" style="width:auto" ${s.autoscan!==false?'checked':''}> Read receipts automatically when I add a photo</label>
    <p class="muted">Reading happens on your device and photos are not sent anywhere. The first time, the app downloads some reading data (a few MB), so it needs internet once.</p>
    <div class="actions"><button class="btn" id="ss">Save settings</button></div></div>
@@ -622,7 +658,7 @@ function vSettings(){
   $('#gc').onclick=()=>{const c=$('#cid').value.trim();if(!c){alert('Paste your Google client ID first.');return}setG({cid:c});syncNow(true)};
   $('#gd').onclick=()=>{try{if(tok)google.accounts.oauth2.revoke(tok)}catch(e){}tok=null;tokExp=0;syncErr='';setG({on:0});vSettings()};
   $('#ss').onclick=()=>{const r=parseFloat($('#rate').value),c=$('#cats').value.split('\n').map(x=>x.trim()).filter(Boolean);
-    if(isNaN(r)||!c.length){alert('Enter a valid rate and at least one category.');return}saveSettings({...settings(),rate:r,categories:c,autoscan:$('#autoscan').checked});alert('Saved.')};
+    if(isNaN(r)||!c.length){alert('Enter a valid rate and at least one category.');return}saveSettings({...settings(),rate:r,categories:c,autoscan:$('#autoscan').checked,clients:$('#clist').value.split('\n').map(x=>x.trim()).filter(Boolean)});alert('Saved.')};
   $('#bk').onclick=()=>download(`expense-backup-${today()}.json`,JSON.stringify({v:1,settings:settings(),receipts,trips}),'application/json');
   $('#rs').onclick=()=>$('#rf').click();
   $('#rf').onchange=async e=>{const f=e.target.files[0];if(!f)return;
