@@ -391,11 +391,11 @@ let gps=null;
 function vMileage(){
   const list=trips.filter(x=>x.date.startsWith(year));
   $('#main').innerHTML=`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
-    <div class="actions" style="margin:0"><button class="btn" id="add">+ Add trip</button><button class="btn sec" id="trk">📍 Track with GPS</button></div>${yearPicker()}</div></div>
+    <div class="actions" style="margin:0"><button class="btn" id="add">+ Add trip</button><button class="btn sec" id="trk">📍 Track with GPS</button><button class="btn sec" id="calb">📅 Trips from calendar</button></div>${yearPicker()}</div></div>
    <div class="card">${list.length?list.map(x=>`<div class="item" data-id="${x.id}"><div class="thumb">🚗</div>
       <div class="main"><div class="t">${esc(x.from||'—')} → ${esc(x.to||'—')}</div><div class="s">${x.date} · ${esc(x.purpose)}</div></div>
       <div class="amt">${Number(x.miles).toFixed(1)} mi</div></div>`).join(''):'<p class="muted">No trips for this year.</p>'}</div>`;
-  bindYear();$('#add').onclick=()=>tripForm();$('#trk').onclick=gpsView;
+  bindYear();$('#add').onclick=()=>tripForm();$('#trk').onclick=gpsView;$('#calb').onclick=calTrips;
   document.querySelectorAll('.item').forEach(e=>e.onclick=()=>tripForm(trips.find(t=>t.id===e.dataset.id)));
 }
 function tripForm(t,prefillMiles){
@@ -417,6 +417,98 @@ function tripForm(t,prefillMiles){
     await put('trips',{...t,id:t.id,date:$('#d').value,from:$('#f').value.trim(),to:$('#t').value.trim(),purpose:$('#p').value.trim(),odoStart:isNaN(os)?null:os,odoEnd:isNaN(oe)?null:oe,miles:m,updated:Date.now()});
     year=$('#d').value.slice(0,4);await load();render();autoSync();};
 }
+// ---- calendar logic ----
+const normPlace=s=>String(s||'').toLowerCase().replace(/\s+/g,' ').trim();
+// Pure: turns calendar events into trip suggestions (skips cancelled, declined, no-location, already-added and dismissed).
+function eventsToSuggestions(items,calId,existingKeys,skippedKeys){
+  return (items||[]).filter(e=>e&&e.status!=='cancelled'&&e.location&&e.start&&!(e.attendees||[]).some(a=>a.self&&a.responseStatus==='declined'))
+    .map(e=>{const when=e.start.dateTime||e.start.date;
+      return {key:`${calId}|${e.id}|${when}`,date:when.slice(0,10),title:(e.summary||'(no title)').trim(),location:e.location.split('\n')[0].trim()}})
+    .filter(s=>s.location&&!existingKeys.has(s.key)&&!skippedKeys.has(s.key));
+}
+// Pure: miles from the most recent saved trip to the same place, or ''.
+function knownMiles(tripList,place){const t=[...tripList].sort((a,b)=>b.date.localeCompare(a.date)).find(t=>normPlace(t.to)===normPlace(place)&&Number(t.miles)>0);return t?Number(t.miles):''}
+// ---- end calendar logic ----
+let ctok=null,ctokExp=0;
+function getCalToken(interactive){return new Promise((res,rej)=>{
+  if(ctok&&Date.now()<ctokExp-60000)return res(ctok);
+  const cid=GS().cid;if(!cid)return rej(new Error('Google sign-in is not set up.'));
+  if(!window.google?.accounts?.oauth2)return rej(new Error('Google sign-in did not load. Check your internet connection.'));
+  const c=google.accounts.oauth2.initTokenClient({client_id:cid,scope:'https://www.googleapis.com/auth/calendar.readonly',hint:EMAIL,
+    callback:r=>{if(r.error)return rej(new Error(r.error_description||r.error));ctok=r.access_token;ctokExp=Date.now()+r.expires_in*1000;res(ctok)},
+    error_callback:e=>rej(new Error(e.type||'sign-in cancelled'))});
+  c.requestAccessToken({prompt:interactive?'':'none'});});}
+async function calApi(path){
+  const r=await fetch('https://www.googleapis.com/calendar/v3/'+path,{headers:{Authorization:'Bearer '+ctok}});
+  if(!r.ok){const t=await r.text();throw new Error(r.status===403&&/accessNotConfigured|has not been used|is disabled/i.test(t)?'The Google Calendar API is not turned on for this app yet.':'Calendar error '+r.status+': '+t.slice(0,120))}
+  return r.json();}
+const skipKeys=()=>{try{return new Set(JSON.parse(localStorage.getItem('et-cal-skip')||'[]'))}catch(e){return new Set()}};
+function calTrips(){
+  inForm=true;
+  const toD=today(),fromD=new Date(Date.now()-14*864e5).toISOString().slice(0,10);
+  $('#main').innerHTML=`<div class="card"><h3 style="margin-top:0">Trips from your calendar</h3>
+   <p class="muted">Finds calendar events that have a location, so you can turn them into trips. Events are read on your device only, and nothing is saved unless you add the trip. The app asks Google for read-only calendar access.</p>
+   <div class="row"><div><label>From</label><input type="date" id="cf" value="${fromD}"></div><div><label>To</label><input type="date" id="ct" value="${toD}"></div></div>
+   <label>Where your trips start (used as “From”)</label><input id="chome" value="${esc(settings().home||'')}" placeholder="e.g. Home office">
+   <div id="cals"></div>
+   <div class="actions"><button class="btn" id="cfind">Find trips</button><button class="btn sec" id="cback">Back</button></div>
+   <p class="muted" id="cmsg" aria-live="polite"></p></div><div id="cres"></div>`;
+  $('#cback').onclick=()=>{view='mileage';render()};
+  $('#cfind').onclick=async()=>{
+    const msg=$('#cmsg'),btn=$('#cfind');btn.disabled=true;msg.textContent='Connecting to Google Calendar…';
+    try{
+      await getCalToken(true);
+      if(!$('#cals').dataset.loaded){
+        const j=await calApi('users/me/calendarList?fields=items(id,summary,primary)');
+        let sel=null;try{sel=JSON.parse(localStorage.getItem('et-cals')||'null')}catch(e){}
+        $('#cals').innerHTML='<label>Calendars to check</label>'+(j.items||[]).map(c=>`<label style="display:flex;gap:8px;align-items:center;color:var(--text);font-size:15px;margin:4px 0"><input type="checkbox" class="calck" style="width:auto" value="${esc(c.id)}" ${(sel?sel.includes(c.id):c.primary)?'checked':''}> ${esc(c.summary)}${c.primary?' (main)':''}</label>`).join('');
+        $('#cals').dataset.loaded='1';}
+      const ids=[...document.querySelectorAll('.calck')].filter(x=>x.checked).map(x=>x.value);
+      localStorage.setItem('et-cals',JSON.stringify(ids));
+      if(!ids.length){msg.textContent='Tick at least one calendar.';btn.disabled=false;return}
+      const home=$('#chome').value.trim();saveSettings({...settings(),home});
+      const min=new Date($('#cf').value+'T00:00:00'),max=new Date($('#ct').value+'T00:00:00');max.setDate(max.getDate()+1);
+      if(isNaN(min)||isNaN(max)||max<=min){msg.textContent='Check the dates.';btn.disabled=false;return}
+      msg.textContent='Reading events…';
+      const existing=new Set(trips.map(t=>t.evId).filter(Boolean)),skipped=skipKeys();let sugg=[];
+      for(const id of ids){
+        const j=await calApi(`calendars/${encodeURIComponent(id)}/events?timeMin=${encodeURIComponent(min.toISOString())}&timeMax=${encodeURIComponent(max.toISOString())}&singleEvents=true&orderBy=startTime&maxResults=250&fields=items(id,summary,location,start,end,status,attendees(self,responseStatus))`);
+        sugg=sugg.concat(eventsToSuggestions(j.items,id,existing,skipped));}
+      sugg.sort((a,b)=>a.date.localeCompare(b.date));
+      msg.textContent=sugg.length?`${sugg.length} event${sugg.length>1?'s':''} with a location. Tick the ones that were business trips and check the miles.`:'No new events with a location in that range.';
+      drawSugg(sugg,home);
+    }catch(e){msg.textContent=e.message||'Could not read the calendar.'}
+    btn.disabled=false;};
+}
+function drawSugg(sugg,home){
+  const box=$('#cres');
+  box.innerHTML=sugg.map((s,i)=>{const km=knownMiles(trips,s.location);
+    return `<div class="card csug" data-i="${i}">
+     <label style="display:flex;gap:8px;align-items:center;color:var(--text);margin:0;font-size:16px"><input type="checkbox" class="sk" style="width:auto" ${km?'checked':''}> <b>${esc(s.date)}</b> · ${esc(s.title)}</label>
+     <div class="muted" style="margin-top:4px">${esc(s.location)}${km?` · last time: ${km} mi`:''}</div>
+     <div class="row"><div><label>From</label><input class="sf" value="${esc(home)}"></div><div><label>Miles</label><input class="sm" type="number" step="0.1" inputmode="decimal" value="${km}"></div></div>
+     <label>Purpose</label><input class="sp" value="${esc(s.title)}">
+     <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" class="sr" style="width:auto"> Round trip (counts the miles twice)</label>
+     <div class="actions"><button class="btn del sdel">Not a business trip</button></div></div>`}).join('')+
+    (sugg.length?'<div class="actions"><button class="btn" id="cadd">Add ticked trips</button></div>':'');
+  box.querySelectorAll('.csug').forEach(card=>{
+    const s=sugg[+card.dataset.i];
+    card.querySelector('.sm').addEventListener('input',e=>{if(parseFloat(e.target.value)>0)card.querySelector('.sk').checked=true});
+    card.querySelector('.sdel').onclick=()=>{const k=skipKeys();k.add(s.key);localStorage.setItem('et-cal-skip',JSON.stringify([...k]));card.remove()};});
+  const add=$('#cadd');if(!add)return;
+  add.onclick=async()=>{
+    const picks=[];
+    for(const card of box.querySelectorAll('.csug')){
+      if(!card.querySelector('.sk').checked)continue;
+      const s=sugg[+card.dataset.i],m=parseFloat(card.querySelector('.sm').value);
+      if(!(m>0)){alert(`Enter the miles for "${s.title}" on ${s.date}, or untick it.`);card.querySelector('.sm').focus();return}
+      picks.push({id:uid(),date:s.date,from:card.querySelector('.sf').value.trim(),to:s.location,purpose:card.querySelector('.sp').value.trim(),
+        odoStart:null,odoEnd:null,miles:Math.round(m*(card.querySelector('.sr').checked?2:1)*10)/10,evId:s.key,updated:Date.now()});}
+    if(!picks.length){alert('Tick the trips you want to add.');return}
+    for(const t of picks)await put('trips',t);
+    year=picks[picks.length-1].date.slice(0,4);await load();view='mileage';render();autoSync();};
+}
+
 // GPS tracking
 function hav(a,b){const R=3958.8,r=Math.PI/180,dLa=(b.lat-a.lat)*r,dLo=(b.lon-a.lon)*r;
   const x=Math.sin(dLa/2)**2+Math.cos(a.lat*r)*Math.cos(b.lat*r)*Math.sin(dLo/2)**2;return 2*R*Math.asin(Math.sqrt(x));}
@@ -467,7 +559,7 @@ function vSettings(){
   $('#gc').onclick=()=>{const c=$('#cid').value.trim();if(!c){alert('Paste your Google client ID first.');return}setG({cid:c});syncNow(true)};
   $('#gd').onclick=()=>{try{if(tok)google.accounts.oauth2.revoke(tok)}catch(e){}tok=null;tokExp=0;syncErr='';setG({on:0});vSettings()};
   $('#ss').onclick=()=>{const r=parseFloat($('#rate').value),c=$('#cats').value.split('\n').map(x=>x.trim()).filter(Boolean);
-    if(isNaN(r)||!c.length){alert('Enter a valid rate and at least one category.');return}saveSettings({rate:r,categories:c,autoscan:$('#autoscan').checked});alert('Saved.')};
+    if(isNaN(r)||!c.length){alert('Enter a valid rate and at least one category.');return}saveSettings({...settings(),rate:r,categories:c,autoscan:$('#autoscan').checked});alert('Saved.')};
   $('#bk').onclick=()=>download(`expense-backup-${today()}.json`,JSON.stringify({v:1,settings:settings(),receipts,trips}),'application/json');
   $('#rs').onclick=()=>$('#rf').click();
   $('#rf').onchange=async e=>{const f=e.target.files[0];if(!f)return;
