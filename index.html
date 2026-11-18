@@ -408,15 +408,62 @@ function tripForm(t,prefillMiles){
    <label>Business purpose</label><input id="p" value="${esc(t.purpose)}">
    <div class="row"><div><label>Odometer start (optional)</label><input type="number" step="0.1" inputmode="decimal" id="os" value="${t.odoStart||(isNew?lastOdo:'')}"></div><div><label>Odometer end (optional)</label><input type="number" step="0.1" inputmode="decimal" id="oe" value="${t.odoEnd}"></div></div>
    <label>Miles <span class="muted">(auto-filled from odometer, or type directly)</span></label><input type="number" step="0.1" inputmode="decimal" id="m" value="${t.miles}">
+   <div class="actions" style="margin-top:8px"><button type="button" class="btn sec" id="est">📍 Estimate miles from addresses</button></div>
+   <p class="muted" id="estmsg" aria-live="polite">Looks up the driving route from “From” to “To” using OpenStreetMap, so those two addresses are sent to that service. It gives one-way miles; check the result.</p>
    <div class="actions"><button class="btn" id="save">Save</button><button class="btn sec" id="cancel">Cancel</button>${isNew?'':'<button class="btn del" id="del">Delete</button>'}</div></div>`;
   const calc=()=>{const s=parseFloat($('#os').value),e=parseFloat($('#oe').value);if(!isNaN(s)&&!isNaN(e)&&e>=s)$('#m').value=(e-s).toFixed(1)};
   $('#os').oninput=calc;$('#oe').oninput=calc;$('#cancel').onclick=render;
+  $('#est').onclick=async()=>{
+    const msg=$('#estmsg'),from=$('#f').value.trim(),to=$('#t').value.trim();
+    if(!from||!to){msg.textContent='Fill in both “From” and “To” first.';return}
+    $('#est').disabled=true;msg.textContent='Looking up the route…';
+    try{const r=await estimateMiles(from,to);$('#m').value=r.miles;
+      msg.textContent=`About ${r.miles} mi one way by road. Matched: ${r.fromName} → ${r.toName}. Please check it looks right.`}
+    catch(e){msg.textContent=e.message||'Could not estimate the distance.'}
+    $('#est').disabled=false;};
   if(!isNew)$('#del').onclick=async()=>{if(confirm('Delete this trip?')){queueDel(`t_${t.id}.json`);await rm('trips',t.id);await load();render();autoSync()}};
   $('#save').onclick=async()=>{const m=parseFloat($('#m').value);if(!$('#d').value||isNaN(m)||m<=0){alert('Date and miles are required.');return}
     const os=parseFloat($('#os').value),oe=parseFloat($('#oe').value);
     await put('trips',{...t,id:t.id,date:$('#d').value,from:$('#f').value.trim(),to:$('#t').value.trim(),purpose:$('#p').value.trim(),odoStart:isNaN(os)?null:os,odoEnd:isNaN(oe)?null:oe,miles:m,updated:Date.now()});
     year=$('#d').value.slice(0,4);await load();render();autoSync();};
 }
+// ---- distance logic ----
+// Driving distance from OpenStreetMap services (Nominatim for addresses, OSRM for routes).
+// The two addresses are sent to those public services only when the user taps an Estimate button.
+const geoCache=()=>{try{return JSON.parse(localStorage.getItem('et-geo')||'{}')}catch(e){return {}}};
+const saveGeo=c=>{try{localStorage.setItem('et-geo',JSON.stringify(c))}catch(e){}};
+async function fetchJson(url,ms=12000){const ac=new AbortController(),t=setTimeout(()=>ac.abort(),ms);
+  try{const r=await fetch(url,{signal:ac.signal});if(!r.ok)throw new Error('HTTP '+r.status);return await r.json()}
+  catch(e){throw new Error(e.name==='AbortError'?'The map service took too long. Try again.':'Could not reach the map service ('+(e.message||'network error')+').')}
+  finally{clearTimeout(t)}}
+// "Blue Cafe, 12 Main St, Roanoke VA" -> full text, then without the business name, then without the second part.
+function addressCandidates(a){
+  const parts=String(a||'').split('\n')[0].split(',').map(s=>s.trim()).filter(Boolean),out=[];
+  for(let i=0;i<Math.min(parts.length,3);i++){const c=parts.slice(i).join(', ');if(c.length>=5&&!out.includes(c))out.push(c)}
+  return out;}
+const shortName=n=>String(n||'').split(',').slice(0,3).join(',').trim();
+// ---- end distance logic ----
+let lastGeo=0;
+async function geocode(addr,near){
+  const key=normPlace(addr),cache=geoCache();if(cache[key])return cache[key];
+  // prefer results close to the starting point (a soft hint, not a limit)
+  const bias=near?`&viewbox=${near.lon-0.7},${near.lat+0.7},${near.lon+0.7},${near.lat-0.7}`:'';
+  for(const cand of addressCandidates(addr)){
+    const wait=1100-(Date.now()-lastGeo);if(wait>0)await new Promise(r=>setTimeout(r,wait));lastGeo=Date.now();
+    const j=await fetchJson('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&q='+encodeURIComponent(cand)+bias);
+    if(j&&j[0]){const p={lat:+j[0].lat,lon:+j[0].lon,name:j[0].display_name||cand};cache[key]=p;saveGeo(cache);return p}}
+  throw new Error(`Couldn't find "${addr}" on the map. A full street address works best.`);}
+const MAX_EST_MILES=250;
+async function estimateMiles(from,to){
+  // The starting point anchors everything, so it must be a real street address ("Home office" matches random places).
+  if(!/\d/.test(from))throw new Error('Use a street address for the starting point (for example 123 Main St, Roanoke VA) so the route is accurate.');
+  const a=await geocode(from),b=await geocode(to,a);
+  const j=await fetchJson(`https://router.project-osrm.org/route/v1/driving/${a.lon},${a.lat};${b.lon},${b.lat}?overview=false`);
+  const m=j&&j.routes&&j.routes[0]&&j.routes[0].distance;if(!(m>0))throw new Error('No driving route found between those places.');
+  const miles=Math.round(m/1609.344*10)/10,r={miles,fromName:shortName(a.name),toName:shortName(b.name)};
+  if(miles>MAX_EST_MILES)throw new Error(`That route is about ${miles} mi, which looks too far, so I did not fill it in. Matched: ${r.fromName} → ${r.toName}. Check the addresses, or type the miles yourself.`);
+  return r;}
+
 // ---- calendar logic ----
 const normPlace=s=>String(s||'').toLowerCase().replace(/\s+/g,' ').trim();
 // Pure: turns calendar events into trip suggestions (skips cancelled, declined, no-location, already-added and dismissed).
@@ -449,7 +496,7 @@ function calTrips(){
   $('#main').innerHTML=`<div class="card"><h3 style="margin-top:0">Trips from your calendar</h3>
    <p class="muted">Finds calendar events that have a location, so you can turn them into trips. Events are read on your device only, and nothing is saved unless you add the trip. The app asks Google for read-only calendar access.</p>
    <div class="row"><div><label>From</label><input type="date" id="cf" value="${fromD}"></div><div><label>To</label><input type="date" id="ct" value="${toD}"></div></div>
-   <label>Where your trips start (used as “From”)</label><input id="chome" value="${esc(settings().home||'')}" placeholder="e.g. Home office">
+   <label>Where your trips start (used as “From”; a street address works best for mile estimates)</label><input id="chome" value="${esc(settings().home||'')}" placeholder="e.g. 123 Main St, Roanoke VA">
    <div id="cals"></div>
    <div class="actions"><button class="btn" id="cfind">Find trips</button><button class="btn sec" id="cback">Back</button></div>
    <p class="muted" id="cmsg" aria-live="polite"></p></div><div id="cres"></div>`;
@@ -487,15 +534,31 @@ function drawSugg(sugg,home){
      <label style="display:flex;gap:8px;align-items:center;color:var(--text);margin:0;font-size:16px"><input type="checkbox" class="sk" style="width:auto" ${km?'checked':''}> <b>${esc(s.date)}</b> · ${esc(s.title)}</label>
      <div class="muted" style="margin-top:4px">${esc(s.location)}${km?` · last time: ${km} mi`:''}</div>
      <div class="row"><div><label>From</label><input class="sf" value="${esc(home)}"></div><div><label>Miles</label><input class="sm" type="number" step="0.1" inputmode="decimal" value="${km}"></div></div>
+     <div class="actions" style="margin-top:6px"><button class="btn sec sest">📍 Estimate miles</button></div>
+     <p class="muted smsg" aria-live="polite"></p>
      <label>Purpose</label><input class="sp" value="${esc(s.title)}">
      <label style="display:flex;gap:8px;align-items:center;color:var(--text)"><input type="checkbox" class="sr" style="width:auto"> Round trip (counts the miles twice)</label>
      <div class="actions"><button class="btn del sdel">Not a business trip</button></div></div>`}).join('')+
-    (sugg.length?'<div class="actions"><button class="btn" id="cadd">Add ticked trips</button></div>':'');
+    (sugg.length?'<p class="muted">Estimates use OpenStreetMap and send the two addresses to that service when you tap an Estimate button. They are one-way driving miles, so tick “Round trip” if you came back the same way.</p><div class="actions"><button class="btn sec" id="cestall">📍 Estimate all missing miles</button><button class="btn" id="cadd">Add ticked trips</button></div><p class="muted" id="cestmsg" aria-live="polite"></p>':'');
+  const estCard=async(card)=>{
+    const s=sugg[+card.dataset.i],msg=card.querySelector('.smsg'),btn=card.querySelector('.sest'),from=card.querySelector('.sf').value.trim();
+    if(!from){msg.textContent='Enter a starting address first.';return false}
+    btn.disabled=true;msg.textContent='Looking up the route…';
+    try{const r=await estimateMiles(from,s.location),sm=card.querySelector('.sm');sm.value=r.miles;sm.dispatchEvent(new Event('input'));
+      msg.textContent=`About ${r.miles} mi one way by road. Matched: ${r.fromName} → ${r.toName}. Please check it looks right.`;btn.disabled=false;return true}
+    catch(e){msg.textContent=e.message||'Could not estimate the distance.';btn.disabled=false;return false}};
   box.querySelectorAll('.csug').forEach(card=>{
     const s=sugg[+card.dataset.i];
     card.querySelector('.sm').addEventListener('input',e=>{if(parseFloat(e.target.value)>0)card.querySelector('.sk').checked=true});
+    card.querySelector('.sest').onclick=()=>estCard(card);
     card.querySelector('.sdel').onclick=()=>{const k=skipKeys();k.add(s.key);localStorage.setItem('et-cal-skip',JSON.stringify([...k]));card.remove()};});
   const add=$('#cadd');if(!add)return;
+  $('#cestall').onclick=async()=>{
+    const b=$('#cestall'),m=$('#cestmsg');b.disabled=true;let n=0,fail=0;
+    const todo=[...box.querySelectorAll('.csug')].filter(c=>!parseFloat(c.querySelector('.sm').value));
+    if(!todo.length){m.textContent='Every trip already has miles.';b.disabled=false;return}
+    for(const c of todo){m.textContent=`Estimating ${n+fail+1} of ${todo.length}…`;(await estCard(c))?n++:fail++}
+    m.textContent=`Estimated ${n} of ${todo.length}.`+(fail?' The rest need a street address in “From” or miles typed by hand.':' Please check each one.');b.disabled=false;};
   add.onclick=async()=>{
     const picks=[];
     for(const card of box.querySelectorAll('.csug')){
