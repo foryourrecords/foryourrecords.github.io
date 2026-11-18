@@ -92,7 +92,7 @@ const uid=()=>Date.now().toString(36)+Math.random().toString(36).slice(2,7);
 
 const DEF={rate:0.70,autoscan:true,categories:['Meals','Supplies','Fuel','Travel','Software','Equipment','Advertising','Utilities','Other']};
 const settings=()=>{try{return Object.assign({},DEF,JSON.parse(localStorage.getItem('et-settings')||'{}'))}catch(e){return {...DEF}}};
-const saveSettings=s=>localStorage.setItem('et-settings',JSON.stringify(s));
+const saveSettings=s=>localStorage.setItem('et-settings',JSON.stringify({...s,_u:Date.now()})); // _u = last change, used to sync settings between devices
 
 // ---------- helpers ----------
 const $=(s,r=document)=>r.querySelector(s);
@@ -203,13 +203,15 @@ function totals(){
 function vSummary(){
   const T=totals();
   $('#main').innerHTML=`
+  ${homeCards()}
   <div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">Tax year</h3>${yearPicker()}</div>
    <div class="stats" style="margin-top:12px">
     <div class="stat"><b>${money(T.spent)}</b><span>Receipts (${T.r.length})</span></div>
     <div class="stat"><b>${T.miles.toFixed(1)} mi</b><span>Business miles (${T.t.length} trips)</span></div>
     <div class="stat"><b>${money(T.ded)}</b><span>Mileage deduction @ ${money(settings().rate)}/mi</span></div>
     <div class="stat"><b>${money(T.spent+T.ded)}</b><span>Total deductible</span></div>
-   </div></div>
+   </div>
+   <p class="muted" style="margin-bottom:0">Using the standard mileage rate? It already covers most car costs such as gas and repairs, so ask your accountant before deducting those separately.</p></div>
   <div class="card"><h3 style="margin-top:0">By category</h3>
    ${Object.keys(T.by).length?`<table>${Object.entries(T.by).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<tr><td>${esc(k)}</td><td class="r">${money(v)}</td></tr>`).join('')}</table>`:'<p class="muted">No receipts this year yet.</p>'}</div>
   ${clientCard(T)}
@@ -218,7 +220,7 @@ function vSummary(){
    <p class="muted">One file for your accountant: summary, receipts and mileage spreadsheets, a printable report, and every receipt photo sorted by category.</p>
    <div class="actions"><button class="btn sec" id="csvR">Receipts CSV</button><button class="btn sec" id="csvT">Mileage CSV</button><button class="btn sec" id="pdf">PDF report with photos</button></div>
    <p class="muted">The report includes your receipt photos. Open it and use Print → Save as PDF.</p></div>`;
-  bindYear();$('#pkg').onclick=e=>packageExport(e.currentTarget);$('#stmx').onclick=()=>statementView();
+  wireHome();bindYear();$('#pkg').onclick=e=>packageExport(e.currentTarget);$('#stmx').onclick=()=>statementView();
   document.querySelectorAll('.stmbtn').forEach(b=>b.onclick=()=>statementView(b.dataset.c));$('#csvR').onclick=()=>csv('receipts');$('#csvT').onclick=()=>csv('trips');$('#pdf').onclick=report;
 }
 
@@ -352,7 +354,7 @@ function receiptForm(r){
   $('#main').innerHTML=`<div class="card"><h3 style="margin-top:0">${isNew?'New':'Edit'} receipt</h3>
    <div class="row"><div><label>Date</label><input type="date" id="d" value="${r.date}"></div><div><label>Amount ($)</label><input type="number" step="0.01" inputmode="decimal" id="a" value="${r.amount}"></div></div>
    <label>Vendor</label><input id="v" value="${esc(r.vendor)}">
-   <label>Category</label><select id="c">${settings().categories.map(c=>`<option ${c===r.category?'selected':''}>${esc(c)}</option>`).join('')}</select>
+   <label>Category</label><select id="c">${[...settings().categories,...(r.category&&!settings().categories.includes(r.category)?[r.category]:[])].map(c=>`<option ${c===r.category?'selected':''}>${esc(c)}</option>`).join('')}</select>
    <label>Client (optional)</label><input id="cl" list="clients" value="${esc(r.client||'')}" autocomplete="off" placeholder="e.g. Acme Corp">${clientDatalist()}
    <label style="display:flex;gap:8px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" id="bl" style="width:auto" ${r.billable?'checked':''}> Billable to this client</label>
    <label style="display:flex;gap:8px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" id="iv" style="width:auto" ${r.invoiced?'checked':''}> Already invoiced${r.invoiced?` (${esc(r.invoiced)})`:''}</label>
@@ -415,7 +417,7 @@ function tripForm(t,prefillMiles){
   $('#main').innerHTML=`<div class="card"><h3 style="margin-top:0">${isNew?'New':'Edit'} trip</h3>
    <label>Date</label><input type="date" id="d" value="${t.date}">
    <div class="row"><div><label>From</label><input id="f" value="${esc(t.from)}"></div><div><label>To</label><input id="t" value="${esc(t.to)}"></div></div>
-   <label>Business purpose</label><input id="p" value="${esc(t.purpose)}">
+   <label>Business purpose</label><input id="p" list="purposes" autocomplete="off" value="${esc(t.purpose)}">${purposeDatalist()}
    <label>Client (optional)</label><input id="cl" list="clients" value="${esc(t.client||'')}" autocomplete="off" placeholder="e.g. Acme Corp">${clientDatalist()}
    <label style="display:flex;gap:8px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" id="bl" style="width:auto" ${t.billable?'checked':''}> Billable to this client</label>
    <label style="display:flex;gap:8px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" id="iv" style="width:auto" ${t.invoiced?'checked':''}> Already invoiced${t.invoiced?` (${esc(t.invoiced)})`:''}</label>
@@ -440,6 +442,42 @@ function tripForm(t,prefillMiles){
     await put('trips',{...t,id:t.id,date:$('#d').value,from:$('#f').value.trim(),to:$('#t').value.trim(),purpose:$('#p').value.trim(),client:canonClient($('#cl').value,clientNames()),billable:$('#bl').checked,invoiced:$('#iv').checked?(t.invoiced||today()):'',odoStart:isNaN(os)?null:os,odoEnd:isNaN(oe)?null:oe,miles:m,updated:Date.now()});
     year=$('#d').value.slice(0,4);await load();render();autoSync();};
 }
+// ---- presets (pure) ----
+const PRESETS=[
+ {id:'consultant',name:'Consultant or tech services',desc:'Client meetings, software, equipment, travel',
+  categories:['Software & subscriptions','Meals','Travel & lodging','Equipment','Office supplies','Phone & internet','Training & dues','Client gifts','Advertising','Other'],
+  purposes:['Client meeting','Site visit','On-site support','Conference or training','Networking','Supplies pickup','Bank or post office']},
+ {id:'trades',name:'Contractor or skilled trade',desc:'Job sites, materials, tools, suppliers',
+  categories:['Materials','Tools & equipment','Fuel','Subcontractors','Permits & licenses','Safety gear','Supplies','Meals','Phone & internet','Other'],
+  purposes:['Job site visit','Supplier pickup','Estimate','Inspection','Equipment pickup','Bank deposit']},
+ {id:'realestate',name:'Real estate agent',desc:'Showings, marketing, dues, client gifts',
+  categories:['Marketing & signage','MLS & association dues','Photography & staging','Client gifts','Open house supplies','Education','Software & subscriptions','Meals','Parking & tolls','Other'],
+  purposes:['Showing','Open house','Listing appointment','Closing','Inspection','Office or training']},
+ {id:'creative',name:'Photographer or creative',desc:'Shoots, gear, locations, software',
+  categories:['Equipment','Props & supplies','Location & studio fees','Software & subscriptions','Assistants & models','Travel','Marketing','Meals','Other'],
+  purposes:['Shoot','Client meeting','Location scouting','Equipment pickup','Delivery to client']},
+ {id:'mobilehealth',name:'Home visits or mobile health care',desc:'Patient or client visits, supplies, training',
+  categories:['Medical supplies','Uniforms & gear','Continuing education','Fuel','Parking & tolls','Phone','Software & subscriptions','Other'],
+  purposes:['Home visit','Patient visit','Training','Supply pickup','Office or clinic']},
+ {id:'sales',name:'Sales representative',desc:'Client visits, samples, trade shows',
+  categories:['Meals','Travel & lodging','Samples & demos','Software & subscriptions','Client gifts','Phone','Parking & tolls','Advertising','Other'],
+  purposes:['Client visit','Prospect meeting','Trade show','Delivery','Training']},
+ {id:'general',name:'Something else',desc:'General business categories',
+  categories:['Meals','Supplies','Fuel','Travel','Software','Equipment','Advertising','Utilities','Other'],
+  purposes:['Client meeting','Supplies','Bank or post office','Delivery','Other business errand']}];
+// Keep your own categories (add the preset's missing ones) or replace them; "Other" always stays last.
+function mergeCategories(existing,preset,replace){
+  const base=replace?[]:[...(existing||[])],seen=new Set(base.map(x=>x.toLowerCase()));
+  for(const c of preset||[])if(!seen.has(c.toLowerCase())){base.push(c);seen.add(c.toLowerCase())}
+  const i=base.findIndex(x=>x.toLowerCase()==='other');if(i>=0&&i!==base.length-1)base.push(base.splice(i,1)[0]);
+  return base;}
+function mergePurposes(existing,preset,replace){
+  const base=replace?[]:[...(existing||[])],seen=new Set(base.map(x=>x.toLowerCase()));
+  for(const c of preset||[])if(!seen.has(c.toLowerCase())){base.push(c);seen.add(c.toLowerCase())}
+  return base;}
+function applyPreset(cur,p,opt){return {...cur,profession:p.id,categories:mergeCategories(cur.categories,p.categories,opt.replace),purposes:mergePurposes(cur.purposes,p.purposes,opt.replace)}}
+// ---- end presets ----
+
 // ---- client logic ----
 // Snap a typed client name to an existing one, ignoring case and extra spaces.
 function canonClient(v,names){const t=String(v||'').replace(/\s+/g,' ').trim();if(!t)return '';const hit=(names||[]).find(n=>n.toLowerCase()===t.toLowerCase());return hit||t}
@@ -451,6 +489,48 @@ function byClient(rs,ts,rate){
   return [...m.values()].sort((a,b)=>((a.client==='')-(b.client===''))||((b.receipts+b.miles*rate)-(a.receipts+a.miles*rate)));
 }
 // ---- end client logic ----
+function purposeNames(){const out=[],seen=new Set();
+  for(const p of [...(settings().purposes||[]),...trips.map(t=>t.purpose)]){const v=String(p||'').trim(),k=v.toLowerCase();if(v&&!seen.has(k)){seen.add(k);out.push(v)}}
+  return out;}
+const purposeDatalist=()=>`<datalist id="purposes">${purposeNames().map(p=>`<option value="${esc(p)}">`).join('')}</datalist>`;
+
+// ---- first-run setup and getting-started checklist ----
+function onboardView(rerun){
+  inForm=true;const s=settings(),cur=s.profession||'';
+  $('#main').innerHTML=`<div class="card"><h3 style="margin-top:0">${rerun?'Change your work type':'Set up for your work'}</h3>
+   <p class="muted">Pick the closest match. This sets up expense categories and common trip reasons. You can change everything later in Settings.</p>
+   ${PRESETS.map(p=>`<label style="display:flex;gap:10px;align-items:flex-start;color:var(--text);padding:10px;border:1px solid var(--line);border-radius:10px;margin:6px 0;font-size:16px"><input type="radio" name="pr" value="${p.id}" style="width:auto;margin-top:4px" ${cur===p.id?'checked':''}><span><b>${esc(p.name)}</b><br><span class="muted">${esc(p.desc)}</span></span></label>`).join('')}
+   <label>Your business name (shown on client statements)</label><input id="ob1" value="${esc(s.bizName||'')}">
+   <label>Where your trips usually start (street address)</label><input id="ob2" value="${esc(s.home||'')}" placeholder="e.g. 123 Main St, Roanoke VA">
+   <label>Mileage rate ($ per mile). Check the current IRS standard rate.</label><input id="ob3" type="number" step="0.001" inputmode="decimal" value="${s.rate}">
+   <label style="display:flex;gap:8px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" id="ob4" style="width:auto" ${rerun?'':'checked'}> Replace my current categories with this set (otherwise only missing ones are added)</label>
+   <div class="actions"><button class="btn" id="obgo">Save and continue</button><button class="btn sec" id="obskip">${rerun?'Cancel':'Skip for now'}</button></div>
+   <p class="muted" id="obmsg" aria-live="polite"></p></div>`;
+  $('#obskip').onclick=()=>{localStorage.setItem('et-onb','1');view=rerun?'settings':'summary';render()};
+  $('#obgo').onclick=()=>{
+    const id=(document.querySelector('input[name=pr]:checked')||{}).value;
+    if(!id){$('#obmsg').textContent='Pick the closest match, or choose “Something else”.';return}
+    const p=PRESETS.find(x=>x.id===id),r=parseFloat($('#ob3').value);
+    saveSettings({...applyPreset(settings(),p,{replace:$('#ob4').checked}),bizName:$('#ob1').value.trim(),home:$('#ob2').value.trim(),rate:r>=0?r:settings().rate});
+    localStorage.setItem('et-onb','1');view='summary';render();autoSync();};
+}
+function homeCards(){
+  let h='';
+  if(!localStorage.getItem('et-onb')&&!receipts.length&&!trips.length&&!settings().profession)
+    h+=`<div class="card"><h3 style="margin-top:0">Welcome</h3><p>Set the app up for your kind of work in about a minute. It prepares expense categories and common trip reasons.</p><div class="actions"><button class="btn ob-start">Set up</button><button class="btn sec ob-skip">Skip</button></div></div>`;
+  if(!localStorage.getItem('et-checklist-hide')){
+    const items=[[!!settings().bizName,'Add your business details','settings'],[receipts.length>0,'Add your first receipt','receipt'],[trips.length>0,'Log your first trip','trip'],[!!GS().on,'Connect Google Drive to back up and sync','drive']];
+    if(!items.every(i=>i[0]))h+=`<div class="card"><h3 style="margin-top:0">Getting started</h3>${items.map(([done,label,act])=>`<div style="display:flex;gap:10px;align-items:center;margin:8px 0"><span aria-hidden="true">${done?'✓':'○'}</span><span style="flex:1;${done?'text-decoration:line-through;color:var(--muted)':''}">${esc(label)}</span>${done?'':`<button class="btn sec cl-act" data-a="${act}" style="padding:4px 10px;font-size:13px">Start</button>`}</div>`).join('')}<div class="actions"><button class="btn sec cl-hide" style="padding:4px 10px;font-size:13px">Hide this list</button></div></div>`;
+  }
+  return h;}
+function wireHome(){
+  document.querySelectorAll('.ob-start').forEach(b=>b.onclick=()=>onboardView(false));
+  document.querySelectorAll('.ob-skip').forEach(b=>b.onclick=()=>{localStorage.setItem('et-onb','1');render()});
+  document.querySelectorAll('.cl-hide').forEach(b=>b.onclick=()=>{localStorage.setItem('et-checklist-hide','1');render()});
+  document.querySelectorAll('.cl-act').forEach(b=>b.onclick=()=>{const a=b.dataset.a;
+    if(a==='receipt'){view='receipts';render();receiptForm()}else if(a==='trip'){view='mileage';render();tripForm()}else{view='settings';render()}});
+}
+
 const clientNames=()=>{const s=new Set((settings().clients||[]).map(x=>String(x).trim()).filter(Boolean));[...receipts,...trips].forEach(x=>{if(x.client)s.add(x.client)});return [...s].sort((a,b)=>a.localeCompare(b))};
 const clientDatalist=()=>`<datalist id="clients">${clientNames().map(c=>`<option value="${esc(c)}">`).join('')}</datalist>`;
 function clientCard(T){
@@ -679,7 +759,7 @@ function calTrips(){
 function drawSugg(sugg,home){
   const box=$('#cres');
   const names=clientNames(),rules=parseRules(settings().clientRules),learned=learnedDomains();
-  box.innerHTML=clientDatalist()+sugg.map((s,i)=>{const km=knownMiles(trips,s.location),kc=knownClient(trips,s.location);
+  box.innerHTML=clientDatalist()+purposeDatalist()+sugg.map((s,i)=>{const km=knownMiles(trips,s.location),kc=knownClient(trips,s.location);
     // client guess: your rules and client names, then the same place as an earlier trip, then learned company domains
     const m1=matchClient(s,names,rules),m2=(!m1&&!kc.client)?matchLearned(s,learned):null;
     let cli='',bill=false,why='';
@@ -693,7 +773,7 @@ function drawSugg(sugg,home){
      <div class="row"><div><label>From</label><input class="sf" value="${esc(home)}"></div><div><label>Miles</label><input class="sm" type="number" step="0.1" inputmode="decimal" value="${km}"></div></div>
      <div class="actions" style="margin-top:6px"><button class="btn sec sest">📍 Estimate miles</button></div>
      <p class="muted smsg" aria-live="polite"></p>
-     <label>Purpose</label><input class="sp" value="${esc(s.title)}">
+     <label>Purpose</label><input class="sp" list="purposes" autocomplete="off" value="${esc(s.title)}">
      <div class="row"><div><label>Client (optional)</label><input class="sc" list="clients" value="${esc(cli)}" autocomplete="off"></div>
        <div><label style="display:flex;gap:6px;align-items:center;margin-top:30px;color:var(--text);font-size:15px"><input type="checkbox" class="sb" style="width:auto" ${bill?'checked':''}> Billable</label></div></div>
      ${why?`<div class="muted cwhy">${esc(why)}</div>`:''}
@@ -771,8 +851,10 @@ function vSettings(){
    <div class="actions"><button class="btn" id="gc">${g.on?'Sync now':'Connect &amp; sync'}</button><button class="btn del" id="gd">Disconnect</button></div>
    <p class="muted" id="gstat"></p></div>
   <div class="card"><h3 style="margin-top:0">Settings</h3>
+   <p class="muted">Work type: <b>${esc((PRESETS.find(p=>p.id===s.profession)||{}).name||'not set')}</b> <button class="btn sec" id="chprof" style="padding:4px 10px;font-size:13px;margin-left:6px">${s.profession?'Change':'Set up'}</button></p>
    <label>Mileage rate ($ per mile) — check the current IRS standard rate</label><input type="number" step="0.001" id="rate" value="${s.rate}">
    <label>Categories (one per line)</label><textarea id="cats" rows="8">${esc(s.categories.join('\n'))}</textarea>
+   <label>Common trip reasons (one per line)</label><textarea id="plist" rows="4">${esc((s.purposes||[]).join('\n'))}</textarea>
    <label>Clients (optional, one per line; clients you use also appear automatically)</label><textarea id="clist" rows="4">${esc((s.clients||[]).join('\n'))}</textarea>
    <label>Your business name (shown on client statements)</label><input id="bizn" value="${esc(s.bizName||'')}" placeholder="e.g. Roanoke Tech Consultants">
    <label>Address, email or phone for statements (one per line)</label><textarea id="bizc" rows="3">${esc(s.bizContact||'')}</textarea>
@@ -785,11 +867,11 @@ function vSettings(){
    <p class="muted">Data is stored only in this browser. Back up regularly — clearing browser data deletes it. To move data to another device, export here and import there.</p>
    <div class="actions"><button class="btn" id="bk">Download backup (.json)</button><button class="btn sec" id="rs">Restore from backup…</button></div>
    <input type="file" id="rf" accept=".json,application/json" class="hidden"></div>`;
-  updateStatus();
+  updateStatus();$('#chprof').onclick=()=>onboardView(true);
   $('#gc').onclick=()=>{const c=$('#cid').value.trim();if(!c){alert('Paste your Google client ID first.');return}setG({cid:c});syncNow(true)};
   $('#gd').onclick=()=>{try{if(tok)google.accounts.oauth2.revoke(tok)}catch(e){}tok=null;tokExp=0;syncErr='';setG({on:0});vSettings()};
   $('#ss').onclick=()=>{const r=parseFloat($('#rate').value),c=$('#cats').value.split('\n').map(x=>x.trim()).filter(Boolean);
-    if(isNaN(r)||!c.length){alert('Enter a valid rate and at least one category.');return}saveSettings({...settings(),rate:r,categories:c,autoscan:$('#autoscan').checked,clients:$('#clist').value.split('\n').map(x=>x.trim()).filter(Boolean),bizName:$('#bizn').value.trim(),bizContact:$('#bizc').value.trim(),clientRules:$('#crules').value.trim()});alert('Saved.')};
+    if(isNaN(r)||!c.length){alert('Enter a valid rate and at least one category.');return}saveSettings({...settings(),rate:r,categories:c,autoscan:$('#autoscan').checked,purposes:$('#plist').value.split('\n').map(x=>x.trim()).filter(Boolean),clients:$('#clist').value.split('\n').map(x=>x.trim()).filter(Boolean),bizName:$('#bizn').value.trim(),bizContact:$('#bizc').value.trim(),clientRules:$('#crules').value.trim()});alert('Saved.')};
   $('#bk').onclick=()=>download(`expense-backup-${today()}.json`,JSON.stringify({v:1,settings:settings(),receipts,trips}),'application/json');
   $('#rs').onclick=()=>$('#rf').click();
   $('#rf').onchange=async e=>{const f=e.target.files[0];if(!f)return;
@@ -884,6 +966,10 @@ async function syncNow(interactive){
         else if(!f&&rec._s)await rm(store,rec.id);
         else if(!f||rec.updated>ru)await push(store,pre,rec,folder,byName,f);}
       for(const [name,f] of [...byName])if(name.startsWith(pre)&&name.endsWith('.json')&&!seen.has(name))await pull(store,f,byName);}
+    // settings (categories, rate, clients, business details, rules) follow you between devices; the newest change wins
+    {const f=byName.get('settings.json'),ru=Number(f?.appProperties?.updated||0),cur=settings(),lu=Number(cur._u||0);
+     if(f&&ru>lu){const j=await (await api(`${API}/files/${f.id}?alt=media`)).json();if(j&&typeof j==='object')localStorage.setItem('et-settings',JSON.stringify(j))}
+     else if(lu&&(!f||lu>ru))await upload(folder,'settings.json',new Blob([JSON.stringify(cur)],{type:'application/json'}),'application/json',{updated:String(lu)},f?.id);}
     setG({last:Date.now()});await load();
   }catch(e){syncErr=interactive?e.message:(/Drive error|Enter your|did not load|You signed/.test(e.message)?e.message:'Tap ☁ to sign in to Google again.');}
   syncing=false;updateStatus();if(!inForm&&!syncErr)render();
