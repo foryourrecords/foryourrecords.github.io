@@ -440,6 +440,7 @@ function tripForm(t,prefillMiles){
    <div class="actions" style="margin-top:0"><button type="button" class="btn sec" id="gmap">🗺 Open route in Google Maps</button><button type="button" class="btn sec" id="rshot">📷 Add route screenshot</button><button type="button" class="btn sec" id="rread">🔍 Read miles from screenshot</button><button type="button" class="btn sec" id="rfill">📍 Fill From and To from screenshot</button></div>
    <input type="file" id="rf" accept="image/*" multiple class="hidden">
    <div class="photos" id="rph"></div>
+   <details id="rdbg" class="hidden" style="margin:6px 0"><summary class="muted">What the app read from the screenshot</summary><pre id="rtext" style="white-space:pre-wrap;font-size:12px;max-height:220px;overflow:auto;margin:6px 0"></pre></details>
    <p class="muted" id="rmsg" aria-live="polite">Type the From and To addresses, open the route in Google Maps, take a screenshot of the directions screen, and add it here. The app reads the distance from it and keeps the screenshot with the trip as a record.</p>
    <div class="actions"><button class="btn" id="save">Save</button><button class="btn sec" id="cancel">Cancel</button>${isNew?'':'<button class="btn del" id="del">Delete</button>'}</div></div>`;
   const drawShots=()=>{$('#rph').innerHTML=photos.length?photos.map((p,i)=>`<div><img src="${p}" data-z="${i}" alt="Route screenshot"><button class="x" data-i="${i}" aria-label="Remove screenshot">×</button></div>`).join(''):'';
@@ -448,13 +449,20 @@ function tripForm(t,prefillMiles){
   drawShots();
   let reading=false,cache={k:'',text:''};
   // read the screenshot once and reuse the text for both the miles and the addresses
-  const shotText=async(onp)=>{const k=photos[0].length+':'+photos[0].slice(-60);if(cache.k===k)return cache.text;const text=await ocr(photos[0],onp);cache={k,text};return text};
+  const shotText=async(onp)=>{const k=photos[0].length+':'+photos[0].slice(-60);
+    const text=cache.k===k?cache.text:await ocr(photos[0],onp);cache={k,text};
+    $('#rtext').textContent=text.trim()||'(nothing readable)';$('#rdbg').classList.remove('hidden');return text};
   const applyAddr=(text,overwrite)=>{
     const a=parseRouteAddresses(text);if(!a.found||!a.to)return {ok:false};
     const cf=$('#f').value.trim(),ct=$('#t').value.trim(),parts=[];
     if(overwrite||!ct){$('#t').value=a.to;parts.push(`To: ${a.to}`)}
     if(a.from&&(overwrite||!cf)){$('#f').value=a.from;parts.push(`From: ${a.from}`)}
-    let note='';if(a.fromIsMyLocation)note=' Google Maps used “Your location” as the start, so type your From address yourself.';
+    let note='';
+    if(a.fromIsMyLocation){
+      // the screenshot only says "Your location", so use the starting address saved in Settings (if any)
+      const home=(settings().home||'').trim();
+      if(home&&(overwrite||!cf)){$('#f').value=home;parts.push(`From: ${home}`);note=' Google Maps only said “Your location”, so I used your starting address from Settings. Change it if you started somewhere else.'}
+      else note=' Google Maps only said “Your location”, so type your From address yourself (or save a starting address in Settings).'}
     if(a.truncated.from||a.truncated.to)note+=' An address looked cut off in the screenshot, so check it.';
     return {ok:true,parts,note,prev:(overwrite&&(cf||ct))?`Before: From ${cf||'(empty)'}, To ${ct||'(empty)'}.`:''};};
   $('#rfill').onclick=async()=>{const msg=$('#rmsg');if(!photos.length){msg.textContent='Add a screenshot first.';return}
@@ -527,24 +535,38 @@ function parseRouteMiles(text){
     if(/^k/i.test(m[3]))n=n/1.609344;
     if(n>0&&n<2000)out.push({miles:Math.round(n*10)/10,raw:m[0].replace(/\s+/g,' ').trim()});}
   return out;}
+// Icons and buttons next to an address are read as junk ("pp, nx a = bonsack"). Drop leading junk words:
+// symbols and 1-2 letter lowercase fragments. Short real words like "NW" or "5" are kept. All-lowercase text is capitalised.
+function cleanMapLine(raw){
+  const toks=String(raw||'').replace(/\s+/g,' ').trim().split(' ');
+  const junk=t=>/^[^A-Za-z0-9]+$/.test(t)||/^[a-z]{1,2}[^A-Za-z0-9]*$/.test(t);
+  let i=0;while(i<toks.length-1&&junk(toks[i]))i++;
+  let s=toks.slice(i).join(' ').replace(/^[^A-Za-z0-9]+/,'').replace(/[\s|]+$/,'');
+  if(s&&!/[A-Z]/.test(s))s=s.replace(/\b([a-z])/g,c=>c.toUpperCase());
+  return s;}
 // The From and To boxes at the top of a Google Maps directions screen (everything above the mode / time / distance row).
 // When Maps used "Your location" as the start, `from` is blank and fromIsMyLocation is true.
 function parseRouteAddresses(text){
   const lines=String(text||'').split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
-  const stop=lines.findIndex(l=>/^(driving|transit|walking|cycling|biking|rideshare|flights?|best route|fastest route|leave now|depart at|arrive by|options|steps)\b/i.test(l)
+  const stop=lines.findIndex(l=>/^(driving|transit|walking|cycling|biking|rideshare|flights?)\b/i.test(l)
     ||/\b\d+\s*(?:min|mins|hr|hrs|h)\b/i.test(l)||/\b\d+(?:[.,]\d+)?\s*(?:mi|miles|km)\b/i.test(l));
   if(stop<1)return {found:false};
   let mine=false,tFrom=false,tTo=false;
   const labels=/^(your location|my location|current location|starting point|choose starting point.*|choose destination.*|destination|add stop|from|to|directions)$/i;
+  const ui=/^(leave now|options|route options|add stop|add a stop|steps|start|preview|share|search|search here|explore|go|save|more|menu|back|close|edit|swap|reverse|arrive|depart|send directions|set (?:home|work)|your places|saved|updates)\b/i;
   const cands=[];
   for(const raw of lines.slice(0,stop)){
     if((raw.match(/[A-Za-z]/g)||[]).length<4)continue;                       // status bar bits: 10:42, 5G, 89%
-    let s=raw.replace(/^[^A-Za-z0-9]+/,'').replace(/^[a-z]\s+(?=[A-Z0-9])/,'').replace(/[\s|]+$/,'');
+    let s=cleanMapLine(raw);
     const cut=/(…|\.\.\.)$/.test(s);if(cut)s=s.replace(/(…|\.\.\.)$/,'').trim();
-    if(/^(your|my|current) location$/i.test(s)){mine=true;continue}
-    if(!s||labels.test(s))continue;
+    if((s.match(/[A-Za-z]/g)||[]).length<4)continue;
+    if(s.length<30&&/\b(your|my|current)\s+location\b/i.test(s)){mine=true;continue}
+    if(!s||labels.test(s)||ui.test(s))continue;
     cands.push({s,cut});}
   if(!cands.length)return {found:false};
+  // With extra lines above the route, keep the ones that look like addresses (digits, commas, street words).
+  const score=x=>(/\d/.test(x.s)?2:0)+(/,/.test(x.s)?2:0)+(/\b(st|street|ave|avenue|rd|road|dr|drive|blvd|boulevard|ln|lane|way|ct|court|hwy|highway|pkwy|parkway|pl|place|suite|ste)\b/i.test(x.s)?2:0)+(/\s/.test(x.s)?1:0);
+  if(cands.length>2){const good=cands.filter(x=>score(x)>=2);if(good.length>=1){cands.length=0;cands.push(...good)}}
   const to=cands[cands.length-1];
   if(mine)return {found:true,from:'',to:to.s,fromIsMyLocation:true,truncated:{from:false,to:to.cut}};
   if(cands.length>=2){const from=cands[cands.length-2];return {found:true,from:from.s,to:to.s,fromIsMyLocation:false,truncated:{from:from.cut,to:to.cut}}}
