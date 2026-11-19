@@ -68,6 +68,7 @@ td.r,th.r{text-align:right}
   <button data-v="summary" class="on">Summary</button>
   <button data-v="receipts">Receipts</button>
   <button data-v="mileage">Mileage</button>
+  <button data-v="esttax">Est. Tax</button>
   <button data-v="bank">Bank</button>
   <button data-v="taxforms">Tax Forms</button>
   <button data-v="taxdocs">Tax Docs</button>
@@ -82,8 +83,8 @@ td.r,th.r{text-align:right}
 // ---------- storage (IndexedDB) ----------
 let db;
 function openDB(){return new Promise((res,rej)=>{
-  const r=indexedDB.open('expense-tracker',2);
-  r.onupgradeneeded=()=>{const d=r.result;for(const s of ['receipts','trips','taxdocs'])if(!d.objectStoreNames.contains(s))d.createObjectStore(s,{keyPath:'id'});};
+  const r=indexedDB.open('expense-tracker',3);
+  r.onupgradeneeded=()=>{const d=r.result;for(const s of ['receipts','trips','taxdocs','income'])if(!d.objectStoreNames.contains(s))d.createObjectStore(s,{keyPath:'id'});};
   r.onsuccess=()=>{db=r.result;res()};r.onerror=()=>rej(r.error);
 });}
 const tx=(s,m='readonly')=>db.transaction(s,m).objectStore(s);
@@ -103,10 +104,12 @@ const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&g
 const money=n=>'$'+(Number(n)||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
 const today=()=>new Date().toISOString().slice(0,10);
 let view='summary', year=String(new Date().getFullYear());
-let receipts=[],trips=[],taxdocs=[];
+let receipts=[],trips=[],taxdocs=[],incomeRecs=[];
 
 async function load(){
-  receipts=await all('receipts');trips=await all('trips');taxdocs=await all('taxdocs');
+  receipts=await all('receipts');trips=await all('trips');taxdocs=await all('taxdocs');incomeRecs=await all('income');
+  for(const d of incomeRecs)if(!d.updated){d.updated=Date.now();await put('income',d)}
+  incomeRecs.sort((a,b)=>String(b.date).localeCompare(String(a.date)));
   for(const d of taxdocs)if(!d.updated){d.updated=Date.now();await put('taxdocs',d)}
   taxdocs.sort((a,b)=>String(b.year).localeCompare(String(a.year))||(b.updated-a.updated));
   for(const [s,arr] of [['receipts',receipts],['trips',trips]])for(const r of arr){let ch=false;
@@ -115,7 +118,7 @@ async function load(){
     if(ch)await put(s,r);}
   receipts.sort((a,b)=>b.date.localeCompare(a.date));trips.sort((a,b)=>b.date.localeCompare(a.date));
 }
-function years(){const s=new Set([String(new Date().getFullYear())]);[...receipts,...trips].forEach(x=>s.add(x.date.slice(0,4)));taxdocs.forEach(d=>d.year&&s.add(String(d.year)));return [...s].sort().reverse();}
+function years(){const s=new Set([String(new Date().getFullYear())]);[...receipts,...trips].forEach(x=>s.add(x.date.slice(0,4)));taxdocs.forEach(d=>d.year&&s.add(String(d.year)));incomeRecs.forEach(d=>d.date&&s.add(d.date.slice(0,4)));return [...s].sort().reverse();}
 
 // ---- receipt parser ----
 const MONTHS={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
@@ -193,7 +196,7 @@ let inForm=false;
 function render(){
   inForm=false;updateStatus();
   document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('on',b.dataset.v===view));
-  ({summary:vSummary,receipts:vReceipts,mileage:vMileage,bank:vBank,taxforms:vTaxForms,taxdocs:vTaxDocs,settings:vSettings})[view]();
+  ({summary:vSummary,receipts:vReceipts,mileage:vMileage,esttax:vEstTax,bank:vBank,taxforms:vTaxForms,taxdocs:vTaxDocs,settings:vSettings})[view]();
 }
 document.getElementById('nav').onclick=e=>{if(e.target.dataset.v){view=e.target.dataset.v;render();window.scrollTo(0,0)}};
 
@@ -654,6 +657,60 @@ function completeAddress(partial,a){
   const loc=localityOf(a,p),zip=(a.house_number||a.road)?(a.postcode||''):'';
   return [p,loc].filter(Boolean).join(', ')+', '+st+(zip?' '+zip:'');}
 // ---- end address completion ----
+
+// ---- estimated tax logic (pure) ----
+// A rough federal estimate for a self-employed person. IRS figures for 2025 and 2026 (Rev. Proc. 2025-32, SSA wage base).
+// Not included: credits, additional Medicare tax, net investment income tax, AMT, itemized deductions, state detail.
+const EST_Y={
+ 2025:{ss:176100,std:{single:15750,mfj:31500,hoh:23625},qbi:{single:[197300,50000],mfj:[394600,100000],hoh:[197300,50000]},
+  br:{single:[[11925,.10],[48475,.12],[103350,.22],[197300,.24],[250525,.32],[626350,.35],[Infinity,.37]],
+      mfj:[[23850,.10],[96950,.12],[206700,.22],[394600,.24],[501050,.32],[751600,.35],[Infinity,.37]],
+      hoh:[[17000,.10],[64850,.12],[103350,.22],[197300,.24],[250500,.32],[626350,.35],[Infinity,.37]]}},
+ 2026:{ss:184500,std:{single:16100,mfj:32200,hoh:24150},qbi:{single:[201750,75000],mfj:[403500,150000],hoh:[201750,75000]},
+  br:{single:[[12400,.10],[50400,.12],[105700,.22],[201775,.24],[256225,.32],[640600,.35],[Infinity,.37]],
+      mfj:[[24800,.10],[100800,.12],[211400,.22],[403550,.24],[512450,.32],[768700,.35],[Infinity,.37]],
+      hoh:[[17700,.10],[67450,.12],[105700,.22],[201750,.24],[256200,.32],[640600,.35],[Infinity,.37]]}}};
+const estYear=y=>{y=Number(y);return y>=2026?2026:2025};       // years outside the table use the nearest one
+const estYearExact=y=>Number(y)===2025||Number(y)===2026;
+const c2=n=>Math.round((Number(n)||0)*100)/100;
+function bracketTax(taxable,table){let tax=0,prev=0;for(const [top,rate] of table){if(taxable>prev)tax+=(Math.min(taxable,top)-prev)*rate;prev=top;if(taxable<=top)break}return tax}
+function estimateTax(o){
+  const Y=EST_Y[estYear(o.year)],st=Y.std[o.status]?o.status:'single';
+  const income=Number(o.income)||0,exp=Number(o.expenses)||0,other=Number(o.other)||0,withheld=Number(o.withheld)||0;
+  const net=income-exp,seBase=net>0?net*0.9235:0;
+  const se=seBase<400?0:Math.min(seBase,Y.ss)*0.124+seBase*0.029,half=se/2;
+  const agi=net+other-half,taxBefore=Math.max(0,agi-Y.std[st]);
+  let qbi=0;
+  if(o.qbi!==false&&net>0){const [thr,rng]=Y.qbi[st],base=Math.max(0,net-half);
+    const pct=taxBefore<=thr?1:Math.max(0,1-(taxBefore-thr)/rng);        // assumes a consulting business (a "specified service" business)
+    qbi=Math.min(0.2*base*pct,0.2*taxBefore)}
+  const taxable=Math.max(0,taxBefore-qbi),incomeTax=bracketTax(taxable,Y.br[st]),federal=incomeTax+se;
+  const needed=Math.max(0,federal-withheld),state=Math.max(0,net)*((Number(o.stateRate)||0)/100);
+  return {net:c2(net),se:c2(se),half:c2(half),agi:c2(agi),std:Y.std[st],taxableBefore:c2(taxBefore),qbi:c2(qbi),taxable:c2(taxable),incomeTax:c2(incomeTax),
+    federal:c2(federal),withheld:c2(withheld),needed:c2(needed),state:c2(state),exact:estYearExact(o.year)}}
+// Full-year projection from the part of the year that has passed (only for the current year).
+function projFactor(year,now){now=now||new Date();const y=now.getFullYear();if(Number(year)!==y)return 1;
+  const start=Date.UTC(y,0,1),day=Math.floor((Date.UTC(y,now.getMonth(),now.getDate())-start)/86400000)+1,len=(y%4===0&&(y%100!==0||y%400===0))?366:365;
+  return 1/Math.max(0.08,Math.min(1,day/len))}
+function qDueDates(year){year=Number(year);
+  return [[year,3,15],[year,5,15],[year,8,15],[year+1,0,15]].map(([y,m,d])=>{const dt=new Date(Date.UTC(y,m,d)),w=dt.getUTCDay();
+    if(w===6)dt.setUTCDate(dt.getUTCDate()+2);else if(w===0)dt.setUTCDate(dt.getUTCDate()+1);return dt.toISOString().slice(0,10)})}
+function defaultQuarter(dateIso){const m=+dateIso.slice(5,7),d=+dateIso.slice(8,10),k=m*100+d;return k<=415?1:k<=615?2:k<=915?3:4}
+// total = federal tax to pay this year; paid = [{quarter,amount}]; returns the four quarters and what to pay next
+function planQuarters(total,paid,due,todayIso){
+  const inst=total/4,paidBy=q=>paid.filter(p=>p.quarter<=q).reduce((s,p)=>s+(Number(p.amount)||0),0),all=paidBy(4);let target=-1,lateIdx=-1,firstUp=-1;
+  const rows=[0,1,2,3].map(i=>{const q=i+1,cum=inst*q,isPaid=all+0.5>=cum||paidBy(q)+0.5>=cum;
+    const forQ=paid.filter(p=>p.quarter===q).reduce((s,p)=>s+(Number(p.amount)||0),0);
+    const status=isPaid?'paid':(due[i]<todayIso?'overdue':'upcoming');
+    if(!isPaid&&status==='overdue')lateIdx=i;if(!isPaid&&firstUp<0&&status==='upcoming')firstUp=i;
+    return {q,due:due[i],installment:c2(inst),paid:c2(forQ),status}});
+  // behind on past due dates: catch up through the latest one; otherwise the next due date
+  target=lateIdx>=0?lateIdx:firstUp;
+  const next=target>=0?{q:target+1,due:due[target],amount:c2(Math.max(0,inst*(target+1)-all)),overdue:target===lateIdx&&lateIdx>=0,
+    then:lateIdx>=0&&firstUp>=0?{q:firstUp+1,due:due[firstUp],amount:c2(inst)}:null}:null;
+  return {rows,next,paidTotal:c2(all),remaining:c2(Math.max(0,total-all))}}
+function safeHarbor(current,prior,priorHigh){prior=Number(prior)||0;if(!(prior>0))return null;return c2(Math.min(current*0.9,prior*(priorHigh?1.1:1)))}
+// ---- end estimated tax logic ----
 
 // ---- bank import logic (pure) ----
 // Reads a bank or credit card CSV on the device, finds the charges, and matches them to receipts you already saved.
@@ -1296,7 +1353,7 @@ async function syncNow(interactive){
     for(const n of JSON.parse(localStorage.getItem('et-del')||'[]')){const f=byName.get(n);
       if(f){await api(`${API}/files/${f.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({trashed:true})});byName.delete(n)}}
     localStorage.setItem('et-del','[]');
-    for(const [store,pre] of [['receipts','r_'],['trips','t_'],['taxdocs','d_']]){
+    for(const [store,pre] of [['receipts','r_'],['trips','t_'],['taxdocs','d_'],['income','i_']]){
       const seen=new Set();
       for(const rec of await all(store)){
         const name=`${pre}${rec.id}.json`,f=byName.get(name);seen.add(name);
@@ -1317,6 +1374,99 @@ async function syncNow(interactive){
 function autoSync(){const g=GS();if(g.cid&&g.on&&navigator.onLine)syncNow(false)}
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)autoSync()});
 window.addEventListener('online',autoSync);
+
+// ---------- estimated tax (income, quarterly payments) ----------
+const EST_DEF={status:'single',other:0,withheld:0,prior:0,priorHigh:false,qbi:true,state:0,plan:'full',proj:'auto'};
+const estSet=()=>({...EST_DEF,...(settings().est||{})});
+function estCalc(){
+  const E=estSet(),sc=taxData(),cur=String(new Date().getFullYear())===year;
+  const proj=(E.proj==='annual'||(E.proj==='auto'&&cur))?projFactor(year):1;
+  const inc=incomeRecs.filter(x=>x.kind==='income'&&String(x.date).startsWith(year)).reduce((s,x)=>s+(Number(x.amount)||0),0);
+  const est=estimateTax({year,income:inc*proj,expenses:sc.total*proj,status:E.status,other:E.other,withheld:E.withheld,qbi:E.qbi,stateRate:E.state});
+  const shTotal=safeHarbor(est.federal,E.prior,E.priorHigh),shNeeded=shTotal===null?null:Math.max(0,c2(shTotal-E.withheld));
+  const planTotal=E.plan==='safe'&&shNeeded!==null?shNeeded:est.needed;
+  const pays=incomeRecs.filter(x=>x.kind==='payment'&&String(x.year)===year),fed=pays.filter(x=>x.type!=='state');
+  const plan=planQuarters(planTotal,fed.map(x=>({quarter:+x.quarter||1,amount:x.amount})),qDueDates(year),today());
+  return {E,inc,proj,est,shNeeded,planTotal,plan,pays,statePaid:pays.filter(x=>x.type==='state').reduce((s,x)=>s+(Number(x.amount)||0),0),cur,expenses:sc.total};}
+function vEstTax(){
+  const C=estCalc(),{E,est,plan}=C,rows=incomeRecs.filter(x=>x.kind==='income'&&String(x.date).startsWith(year)),n=x=>Number(x)||0;
+  const days=plan.next?Math.round((Date.parse(plan.next.due)-Date.parse(today()))/86400000):0;
+  const QN=['Q1 (Jan–Mar)','Q2 (Apr–May)','Q3 (Jun–Aug)','Q4 (Sep–Dec)'];
+  $('#main').innerHTML=`
+  <div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">Estimated tax</h3>${yearPicker()}</div>
+   <p class="muted">A rough federal estimate for ${year} from your income and expenses, split into the four quarterly payments the IRS expects from self-employed people. It is an estimate to plan with, not tax advice.</p>
+   ${!est.exact?`<p class="muted" style="color:var(--danger)">Tax tables for ${year} are not built in, so this uses ${estYear(year)} figures.</p>`:''}
+   ${C.cur&&C.proj>1?`<p class="muted">Projected for the full year: your income and expenses so far are scaled up by ${C.proj.toFixed(2)}× because only part of the year has passed.</p>`:''}
+   ${!rows.length?`<p class="muted"><b>Add your income below</b> to get an estimate. The app already knows your expenses (${money(C.expenses)}).</p>`:''}</div>
+  ${!rows.length?'':`<div class="card" style="${plan.next&&plan.next.overdue?'border-color:var(--danger)':''}">
+   ${est.needed<=0&&!C.planTotal?`<h3 style="margin:0">No estimated payments needed</h3><p class="muted" style="margin-bottom:0">With these numbers you don't owe federal tax beyond what is already withheld.</p>`
+    :plan.next?`<div class="muted">${plan.next.overdue?`Past due: catch up through Q${plan.next.q}`:`Next payment · Q${plan.next.q} · due ${plan.next.due} (${days} day${days===1?'':'s'})`}</div><div style="font-size:30px;font-weight:700">${money(plan.next.amount)}</div>
+     <p class="muted" style="margin-bottom:0">Federal income tax plus self-employment tax. Pay at <a href="https://www.irs.gov/payments/direct-pay" target="_blank" rel="noopener">IRS Direct Pay ↗</a>, then log it below.${plan.next.overdue?` Late quarters can carry a small penalty, so pay the catch-up amount soon.${plan.next.then?` After that, Q${plan.next.then.q} is due ${plan.next.then.due}: about ${money(plan.next.then.amount)}.`:''}`:''}</p>`
+    :`<h3 style="margin:0">You're covered for ${year}</h3><p class="muted" style="margin-bottom:0">Payments logged add up to the estimate (${money(plan.paidTotal)}).</p>`}</div>`}
+  <div class="card"><h3 style="margin-top:0">Quarterly payments</h3>
+   <table><tr><th>Quarter</th><th>Due</th><th class="r">Plan</th><th class="r">Paid</th><th></th></tr>
+   ${plan.rows.map(r=>`<tr><td>${QN[r.q-1]}</td><td>${r.due}</td><td class="r">${money(r.installment)}</td><td class="r">${money(r.paid)}</td><td>${r.status==='paid'?'✔':r.status==='overdue'?'<span style="color:var(--danger)">late</span>':''}</td></tr>`).join('')}
+   <tr><td colspan="2"><b>Total</b></td><td class="r"><b>${money(C.planTotal)}</b></td><td class="r"><b>${money(plan.paidTotal)}</b></td><td></td></tr></table>
+   ${C.E.prior>0&&C.shNeeded!==null?`<p class="muted" style="margin-bottom:0">Safe-harbor minimum (to avoid an underpayment penalty): about ${money(C.shNeeded)}. ${C.E.plan==='safe'?'The plan above uses this lower amount, so you may owe more when you file.':'The plan above uses the full estimate. You can switch to the minimum in the settings below.'}</p>`:`<p class="muted" style="margin-bottom:0">Add last year's total tax in the settings below to see the safe-harbor minimum.</p>`}</div>
+  <div class="card"><h3 style="margin-top:0">How it was figured</h3><table>
+   <tr><td>Income${C.proj>1?' (projected)':''}</td><td class="r">${money(C.inc*C.proj)}</td></tr>
+   <tr><td>Expenses (Schedule C total)${C.proj>1?' (projected)':''}</td><td class="r">−${money(C.expenses*C.proj)}</td></tr>
+   <tr><td><b>Net profit</b></td><td class="r"><b>${money(est.net)}</b></td></tr>
+   <tr><td>Self-employment tax (15.3% of 92.35%)</td><td class="r">${money(est.se)}</td></tr>
+   <tr><td>Other income (spouse, wages)</td><td class="r">${money(n(E.other))}</td></tr>
+   <tr><td>Adjusted gross income (after ½ of SE tax)</td><td class="r">${money(est.agi)}</td></tr>
+   <tr><td>Standard deduction</td><td class="r">−${money(est.std)}</td></tr>
+   ${E.qbi?`<tr><td>20% pass-through deduction (QBI)</td><td class="r">−${money(est.qbi)}</td></tr>`:''}
+   <tr><td>Taxable income</td><td class="r">${money(est.taxable)}</td></tr>
+   <tr><td>Income tax</td><td class="r">${money(est.incomeTax)}</td></tr>
+   <tr><td><b>Federal total (income tax + SE tax)</b></td><td class="r"><b>${money(est.federal)}</b></td></tr>
+   ${n(E.withheld)?`<tr><td>Already withheld from other pay</td><td class="r">−${money(est.withheld)}</td></tr>`:''}
+   <tr><td><b>Federal to pay in estimates</b></td><td class="r"><b>${money(est.needed)}</b></td></tr>
+   ${n(E.state)?`<tr><td>State tax at ${n(E.state)}% of profit (rough)</td><td class="r">${money(est.state)}</td></tr><tr><td>State payments logged</td><td class="r">${money(C.statePaid)}</td></tr>`:''}</table>
+   <p class="muted" style="margin-bottom:0">Left out: tax credits, additional Medicare tax, net investment income tax, itemized deductions, and the details of your state's rules. The pass-through deduction assumes a consulting business, which the IRS treats as a "specified service" business with a phase-out at higher incomes.</p></div>
+  <div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">Income received in ${year}</h3><button class="btn" id="iadd">＋ Add income</button></div>
+   ${rows.length?`<table>${rows.map(x=>`<tr class="irow" data-i="${x.id}" style="cursor:pointer"><td>${x.date}</td><td>${esc(x.client||x.note||'Payment')}${x.client&&x.note?`<div class="muted">${esc(x.note)}</div>`:''}</td><td class="r">${money(x.amount)}</td></tr>`).join('')}<tr><td colspan="2"><b>Total</b></td><td class="r"><b>${money(C.inc)}</b></td></tr></table>`:`<p class="muted">Nothing yet. Add each payment you receive: the date, the client and the amount.</p>`}
+   <p class="muted" style="margin-bottom:0">Count money when you receive it, not when you invoice it.</p></div>
+  <div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">Estimated tax payments you made</h3><button class="btn sec" id="padd">＋ Log payment</button></div>
+   ${C.pays.length?`<table>${C.pays.slice().sort((a,b)=>String(a.date).localeCompare(String(b.date))).map(x=>`<tr class="irow" data-i="${x.id}" style="cursor:pointer"><td>${x.date}</td><td>Q${x.quarter} · ${x.type==='state'?'State':'Federal'}${x.note?`<div class="muted">${esc(x.note)}</div>`:''}</td><td class="r">${money(x.amount)}</td></tr>`).join('')}</table>`:`<p class="muted">No payments logged for ${year} yet.</p>`}</div>
+  <div class="card"><h3 style="margin-top:0">Your tax details</h3>
+   <div class="row"><div><label>Filing status</label><select data-e="status"><option value="single" ${E.status==='single'?'selected':''}>Single</option><option value="mfj" ${E.status==='mfj'?'selected':''}>Married filing jointly</option><option value="hoh" ${E.status==='hoh'?'selected':''}>Head of household</option></select></div>
+   <div><label>State tax rate on profit (%)</label><input data-e="state" type="number" step="0.1" min="0" value="${n(E.state)||''}" placeholder="0"></div></div>
+   <div class="row"><div><label>Other yearly income (spouse, wages)</label><input data-e="other" type="number" step="100" value="${n(E.other)||''}" placeholder="0"></div>
+   <div><label>Tax withheld from that income</label><input data-e="withheld" type="number" step="100" min="0" value="${n(E.withheld)||''}" placeholder="0"></div></div>
+   <div class="row"><div><label>Last year's total tax (for safe harbor)</label><input data-e="prior" type="number" step="100" min="0" value="${n(E.prior)||''}" placeholder="from last year's 1040"></div>
+   <div><label>Payment plan</label><select data-e="plan"><option value="full" ${E.plan!=='safe'?'selected':''}>Full estimate</option><option value="safe" ${E.plan==='safe'?'selected':''}>Safe-harbor minimum</option></select></div></div>
+   <label style="display:flex;gap:10px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" style="width:auto" data-e="priorHigh" ${E.priorHigh?'checked':''}>Last year's income was over $150,000 (safe harbor is then 110%)</label>
+   <label style="display:flex;gap:10px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" style="width:auto" data-e="qbi" ${E.qbi?'checked':''}>Count the 20% pass-through deduction</label>
+   ${C.cur?`<label>Current year is based on</label><select data-e="proj"><option value="auto" ${E.proj==='auto'?'selected':''}>Full-year projection (recommended)</option><option value="ytd" ${E.proj==='ytd'?'selected':''}>Year to date only</option></select>`:''}
+   <p class="muted" style="margin-bottom:0">Saved with your settings. For a precise figure use the worksheet in IRS Form 1040-ES or ask your accountant.</p></div>`;
+  bindYear();
+  document.querySelectorAll('[data-e]').forEach(el=>el.onchange=()=>{const k=el.dataset.e;let v=el.type==='checkbox'?el.checked:el.type==='number'?(parseFloat(el.value)||0):el.value;
+    setTaxSetting(s=>{s.est={...(s.est||{}),[k]:v}});vEstTax()});
+  $('#iadd').onclick=()=>incomeForm(null,'income');$('#padd').onclick=()=>incomeForm(null,'payment');
+  document.querySelectorAll('.irow').forEach(r=>r.onclick=()=>{const x=incomeRecs.find(y=>y.id===r.dataset.i);incomeForm(x,x.kind)});
+}
+function incomeForm(r,kind){inForm=true;const isNew=!r,pay=kind==='payment';
+  r=r||{id:uid(),kind,date:today(),amount:'',client:'',note:'',year:/^\d{4}$/.test(year)?year:String(new Date().getFullYear()),type:'federal'};
+  const yrs=[...new Set([...years(),String(new Date().getFullYear()+1)])].sort().reverse();
+  $('#main').innerHTML=`<div class="card"><h3 style="margin-top:0">${isNew?'Add':'Edit'} ${pay?'estimated tax payment':'income'}</h3>
+   <div class="row"><div><label>Date ${pay?'paid':'received'}</label><input type="date" id="id" value="${esc(r.date)}"></div><div><label>Amount</label><input type="number" id="ia" step="0.01" min="0" value="${r.amount}"></div></div>
+   ${pay?`<div class="row"><div><label>Tax year</label><select id="iy">${yrs.map(y=>`<option ${y===String(r.year)?'selected':''}>${y}</option>`).join('')}</select></div>
+     <div><label>Quarter</label><select id="iq">${[1,2,3,4].map(q=>`<option value="${q}" ${q===(r.quarter||defaultQuarter(r.date))?'selected':''}>Q${q}</option>`).join('')}</select></div></div>
+     <label>Paid to</label><select id="it"><option value="federal" ${r.type!=='state'?'selected':''}>IRS (federal)</option><option value="state" ${r.type==='state'?'selected':''}>State</option></select>
+     <label>Confirmation number (optional)</label><input id="in" value="${esc(r.note)}">`
+    :`<label>Client</label><input id="ic" list="icl" value="${esc(r.client)}" placeholder="Who paid you"><datalist id="icl">${clientNames().map(c=>`<option value="${esc(c)}">`).join('')}</datalist>
+     <label>Note (optional)</label><input id="in" value="${esc(r.note)}" placeholder="Invoice number or description">`}
+   <p class="muted" id="imsg" aria-live="polite"></p>
+   <div class="actions"><button class="btn" id="isave">Save</button><button class="btn sec" id="icancel">Cancel</button>${isNew?'':'<button class="btn del" id="idel">Delete</button>'}</div></div>`;
+  if(pay)$('#id').onchange=()=>{if(isNew)$('#iq').value=defaultQuarter($('#id').value)};
+  $('#icancel').onclick=()=>render();
+  $('#isave').onclick=async()=>{const a=parseFloat($('#ia').value),d=$('#id').value;if(!d||!(a>0)){$('#imsg').textContent='Enter a date and an amount.';return}
+    const rec={...r,kind,date:d,amount:a,note:$('#in').value.trim(),updated:Date.now()};
+    if(pay){rec.year=$('#iy').value;rec.quarter=+$('#iq').value;rec.type=$('#it').value;year=rec.year}else{rec.client=$('#ic').value.trim();year=d.slice(0,4)}
+    await put('income',rec);await load();render();autoSync()};
+  if(!isNew)$('#idel').onclick=async()=>{if(confirm('Delete this entry?')){queueDel(`i_${r.id}.json`);await rm('income',r.id);await load();render();autoSync()}};
+}
 
 // ---------- bank statement import ----------
 let bank={name:'',det:null,cols:null,mode:'auto',more:150};
