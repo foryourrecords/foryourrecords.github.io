@@ -68,6 +68,8 @@ td.r,th.r{text-align:right}
   <button data-v="summary" class="on">Summary</button>
   <button data-v="receipts">Receipts</button>
   <button data-v="mileage">Mileage</button>
+  <button data-v="taxforms">Tax Forms</button>
+  <button data-v="taxdocs">Tax Docs</button>
   <button data-v="settings">Settings</button>
 </nav>
 <main id="main"></main>
@@ -79,8 +81,8 @@ td.r,th.r{text-align:right}
 // ---------- storage (IndexedDB) ----------
 let db;
 function openDB(){return new Promise((res,rej)=>{
-  const r=indexedDB.open('expense-tracker',1);
-  r.onupgradeneeded=()=>{const d=r.result;d.createObjectStore('receipts',{keyPath:'id'});d.createObjectStore('trips',{keyPath:'id'});};
+  const r=indexedDB.open('expense-tracker',2);
+  r.onupgradeneeded=()=>{const d=r.result;for(const s of ['receipts','trips','taxdocs'])if(!d.objectStoreNames.contains(s))d.createObjectStore(s,{keyPath:'id'});};
   r.onsuccess=()=>{db=r.result;res()};r.onerror=()=>rej(r.error);
 });}
 const tx=(s,m='readonly')=>db.transaction(s,m).objectStore(s);
@@ -100,17 +102,19 @@ const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&g
 const money=n=>'$'+(Number(n)||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
 const today=()=>new Date().toISOString().slice(0,10);
 let view='summary', year=String(new Date().getFullYear());
-let receipts=[],trips=[];
+let receipts=[],trips=[],taxdocs=[];
 
 async function load(){
-  receipts=await all('receipts');trips=await all('trips');
+  receipts=await all('receipts');trips=await all('trips');taxdocs=await all('taxdocs');
+  for(const d of taxdocs)if(!d.updated){d.updated=Date.now();await put('taxdocs',d)}
+  taxdocs.sort((a,b)=>String(b.year).localeCompare(String(a.year))||(b.updated-a.updated));
   for(const [s,arr] of [['receipts',receipts],['trips',trips]])for(const r of arr){let ch=false;
     if(!r.updated){r.updated=Date.now();ch=true}
     {const ph=r.photos||[],p=r.pids||[];if(p.length!==ph.length||!r.photos){r.photos=ph;r.pids=ph.map((_,i)=>p[i]||uid());ch=true}} // receipts and trips can both carry photos
     if(ch)await put(s,r);}
   receipts.sort((a,b)=>b.date.localeCompare(a.date));trips.sort((a,b)=>b.date.localeCompare(a.date));
 }
-function years(){const s=new Set([String(new Date().getFullYear())]);[...receipts,...trips].forEach(x=>s.add(x.date.slice(0,4)));return [...s].sort().reverse();}
+function years(){const s=new Set([String(new Date().getFullYear())]);[...receipts,...trips].forEach(x=>s.add(x.date.slice(0,4)));taxdocs.forEach(d=>d.year&&s.add(String(d.year)));return [...s].sort().reverse();}
 
 // ---- receipt parser ----
 const MONTHS={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:11,dec:12};
@@ -188,7 +192,7 @@ let inForm=false;
 function render(){
   inForm=false;updateStatus();
   document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('on',b.dataset.v===view));
-  ({summary:vSummary,receipts:vReceipts,mileage:vMileage,settings:vSettings})[view]();
+  ({summary:vSummary,receipts:vReceipts,mileage:vMileage,taxforms:vTaxForms,taxdocs:vTaxDocs,settings:vSettings})[view]();
 }
 document.getElementById('nav').onclick=e=>{if(e.target.dataset.v){view=e.target.dataset.v;render();window.scrollTo(0,0)}};
 
@@ -649,6 +653,29 @@ function completeAddress(partial,a){
   const loc=localityOf(a,p),zip=(a.house_number||a.road)?(a.postcode||''):'';
   return [p,loc].filter(Boolean).join(', ')+', '+st+(zip?' '+zip:'');}
 // ---- end address completion ----
+
+// ---- tax forms logic (pure) ----
+// Maps expense categories to Schedule C (Form 1040) expense lines and totals them. A worksheet for your accountant, not tax advice.
+const SCHED_C=[['8','Advertising'],['9','Car and truck expenses'],['10','Commissions and fees'],['11','Contract labor'],['13','Depreciation and Section 179 (equipment)'],['15','Insurance (other than health)'],['16b','Interest (other)'],['17','Legal and professional services'],['18','Office expense (includes software)'],['20b','Rent or lease (other business property)'],['21','Repairs and maintenance'],['22','Supplies'],['23','Taxes and licenses'],['24a','Travel'],['24b','Meals (50% deductible)'],['25','Utilities (includes phone and internet)'],['27a','Other expenses']];
+const validLine=c=>SCHED_C.some(x=>x[0]===c)?c:'';
+function defaultLine(cat){const c=String(cat||'').toLowerCase();
+  const R=[[/advert|market|promo|signage/,'8'],[/commission/,'10'],[/contract|freelanc/,'11'],[/equipment|computer|depreci|machinery/,'13'],[/insur/,'15'],[/interest/,'16b'],[/legal|profession|accounting|attorney|consult/,'17'],[/office|software|subscription/,'18'],[/\brent|lease/,'20b'],[/repair|maint/,'21'],[/suppl|material|postage|shipping/,'22'],[/license|permit|\btax|\bfees?\b/,'23'],[/travel|lodging|hotel|airfare/,'24a'],[/meal|food|dining|restaurant/,'24b'],[/utilit|phone|internet/,'25'],[/fuel|\bgas\b|vehicle|\bcar\b|auto|parking|toll/,'9']];
+  for(const [re,l] of R)if(re.test(c))return l;return '27a'}
+const lineFor=(cat,map)=>validLine((map||{})[cat])||defaultLine(cat);
+const r2=n=>Math.round((Number(n)||0)*100)/100;
+function scheduleC(recs,miles,rate,map){
+  const gross={},cats={};
+  for(const r of recs){const l=lineFor(r.category,map),a=Number(r.amount)||0,n=r.category||'Uncategorized';
+    gross[l]=(gross[l]||0)+a;cats[l]=cats[l]||{};cats[l][n]=(cats[l][n]||0)+a}
+  const mileDed=r2((Number(miles)||0)*(Number(rate)||0)),rows=[];
+  for(const [code,label] of SCHED_C){const g=gross[code]||0,m=code==='9'?mileDed:0;
+    if(!(g>0)&&!(m>0))continue;
+    rows.push({line:code,label,gross:r2(g),mileage:m,amount:r2((code==='24b'?g*0.5:g)+m),cats:Object.entries(cats[code]||{}).map(([k,v])=>[k,r2(v)])})}
+  return {rows,total:r2(rows.reduce((s,x)=>s+x.amount,0)),mileDed,miles:Number(miles)||0}}
+const TAX_TODO=[['rcpt','All receipts for the year are uploaded'],['miles','Mileage log is complete through December 31'],['odo','Odometer readings for January 1 and December 31 are written down'],['inc','Income records gathered (invoices, 1099-NEC and 1099-K forms)'],['w9','W-9 collected from every contractor you paid $600 or more'],['est','Estimated tax payments for the year saved in Tax Docs'],['pkg','Accountant package exported and sent']];
+const TAX_TYPES=['W-9','1099-NEC (received)','1099-K (received)','1099-MISC / other 1099','1040-ES estimated tax payment','Schedule C','Schedule SE','Form 4562 (depreciation)','Accountant letter or return','Other'];
+const IRS_FORMS=[['Schedule C (Profit or Loss From Business)','f1040sc'],['Schedule SE (Self-Employment Tax)','f1040sse'],['Form 1040-ES (Estimated Tax)','f1040es'],['Form W-9 (Request for Taxpayer ID)','fw9'],['Form 1099-NEC (Nonemployee Compensation)','f1099nec'],['Form 4562 (Depreciation and Amortization)','f4562']];
+// ---- end tax forms logic ----
 
 // ---- presets (pure) ----
 const PRESETS=[
@@ -1151,11 +1178,16 @@ async function pull(store,f,byName){
       const pf=byName.get(`p_${p}.jpg`);if(!pf)continue;
       ph.push(await toURL(await (await api(`${API}/files/${pf.id}?alt=media`)).blob()));pp.push(p);}
     rec.photos=ph;rec.pids=pp;}
+  if(store==='taxdocs'){ // the form itself (PDF or image) is a separate Drive file named f_<fid>
+    if(old.fid&&old.fid===j.fid&&old.file)rec.file=old.file;
+    else{const ff=byName.get(`f_${j.fid}`);if(!ff)return;rec.file=await toURL(await (await api(`${API}/files/${ff.id}?alt=media`)).blob())}}
   await put(store,rec);}
 async function push(store,pre,rec,folder,byName,f){
   if(store==='receipts'||store==='trips')for(let i=0;i<(rec.pids||[]).length;i++){const n=`p_${rec.pids[i]}.jpg`;
     if(!byName.has(n)){const r=await upload(folder,n,await toBlob(rec.photos[i]),'image/jpeg',{});byName.set(n,{id:r.id,name:n})}}
-  const {photos,_s,...meta}=rec;
+  if(store==='taxdocs'&&rec.fid&&rec.file&&!byName.has(`f_${rec.fid}`)){
+    const r=await upload(folder,`f_${rec.fid}`,await toBlob(rec.file),rec.mime||'application/octet-stream',{});byName.set(`f_${rec.fid}`,{id:r.id,name:`f_${rec.fid}`})}
+  const {photos,_s,file,...meta}=rec;
   await upload(folder,`${pre}${rec.id}.json`,new Blob([JSON.stringify(meta)],{type:'application/json'}),'application/json',{updated:String(rec.updated)},f?.id);
   await put(store,{...rec,_s:rec.updated});}
 
@@ -1168,7 +1200,7 @@ async function syncNow(interactive){
     for(const n of JSON.parse(localStorage.getItem('et-del')||'[]')){const f=byName.get(n);
       if(f){await api(`${API}/files/${f.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({trashed:true})});byName.delete(n)}}
     localStorage.setItem('et-del','[]');
-    for(const [store,pre] of [['receipts','r_'],['trips','t_']]){
+    for(const [store,pre] of [['receipts','r_'],['trips','t_'],['taxdocs','d_']]){
       const seen=new Set();
       for(const rec of await all(store)){
         const name=`${pre}${rec.id}.json`,f=byName.get(name);seen.add(name);
@@ -1189,6 +1221,92 @@ async function syncNow(interactive){
 function autoSync(){const g=GS();if(g.cid&&g.on&&navigator.onLine)syncNow(false)}
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)autoSync()});
 window.addEventListener('online',autoSync);
+
+// ---------- tax forms (year-end worksheets) ----------
+function setTaxSetting(fn){const s=settings();fn(s);saveSettings(s);autoSync()}
+function taxData(){const T=totals(),s=settings();return scheduleC(T.r,T.miles,s.rate,s.taxMap)}
+function worksheetBody(){
+  const S=settings(),sc=taxData(),T=totals(),biz=S.bizName||'';
+  return `<h1>Schedule C Expense Worksheet — ${esc(year)}</h1>${biz?`<p><b>${esc(biz)}</b></p>`:''}
+  <p>Prepared from the Expense &amp; Mileage Tracker for your tax preparer. It organizes expenses by Schedule C line. It is not a tax form and not tax advice. Income (line 1) is not tracked here.</p>
+  <table><tr><th>Line</th><th>Expense</th><th class="r">Amount</th></tr>
+  ${sc.rows.map(x=>`<tr><td>${x.line}</td><td>${esc(x.label)}<br><small>${x.cats.map(([k,v])=>`${esc(k)} ${money(v)}`).join(' · ')}${x.line==='24b'?` · total spent ${money(x.gross)}, 50% deducted`:''}${x.mileage?`${x.cats.length?' · ':''}standard mileage ${T.t.length?`${sc.miles.toFixed(1)} mi × ${money(S.rate)} = `:''}${money(x.mileage)}`:''}</small></td><td class="r">${money(x.amount)}</td></tr>`).join('')||'<tr><td colspan="3">No expenses recorded for this year.</td></tr>'}
+  <tr><td><b>28</b></td><td><b>Total expenses</b></td><td class="r"><b>${money(sc.total)}</b></td></tr></table>
+  <h2>Vehicle (Schedule C, Part IV)</h2>
+  <p>Business miles: <b>${sc.miles.toFixed(1)}</b> across ${T.t.length} trips · Standard mileage rate used: ${money(S.rate)} per mile · Deduction: <b>${money(sc.mileDed)}</b></p>
+  <p><small>Using the standard mileage rate generally covers gas, repairs and similar car costs. Check with your preparer before also deducting those. Parking and tolls can be added on top.</small></p>`}
+function printWorksheet(){$('#report').innerHTML=worksheetBody();setTimeout(()=>window.print(),150)}
+function vTaxForms(){
+  const S=settings(),T=totals(),sc=taxData(),chk=(S.taxChk||{})[year]||{},map=S.taxMap||{};
+  const cats=[...new Set([...(S.categories||[]),...T.r.map(x=>x.category).filter(Boolean)])];
+  const done=TAX_TODO.filter(([k])=>chk[k]).length;
+  $('#main').innerHTML=`
+  <div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">Year-end tax forms</h3>${yearPicker()}</div>
+   <p class="muted">Turns your ${year} receipts and mileage into a Schedule C expense worksheet to hand to your accountant or use when you file. This is a worksheet, not tax advice. Check the totals with a tax professional.</p>
+   <div class="stats"><div class="stat"><b>${money(sc.total)}</b><span>Total expenses (Schedule C line 28)</span></div><div class="stat"><b>${money(sc.mileDed)}</b><span>Mileage deduction (${sc.miles.toFixed(1)} mi)</span></div></div>
+   <div class="actions"><button class="btn" id="tprint">🖨 Print / Save as PDF</button><button class="btn sec" id="tcsv">Download CSV</button></div></div>
+  <div class="card"><h3 style="margin-top:0">Schedule C expenses ${year}</h3>
+   ${sc.rows.length?`<table>${sc.rows.map(x=>`<tr><td style="width:44px"><b>${x.line}</b></td><td>${esc(x.label)}<div class="muted">${x.cats.map(([k,v])=>`${esc(k)} ${money(v)}`).join(' · ')}${x.line==='24b'?` (50% of ${money(x.gross)})`:''}${x.mileage?`${x.cats.length?' · ':''}mileage ${money(x.mileage)}`:''}</div></td><td class="r">${money(x.amount)}</td></tr>`).join('')}<tr><td><b>28</b></td><td><b>Total expenses</b></td><td class="r"><b>${money(sc.total)}</b></td></tr></table>`:'<p class="muted">No receipts or trips for this year yet.</p>'}
+   <p class="muted" style="margin-bottom:0">Meals are counted at 50%. Income is not tracked in this app, so profit is not calculated.</p></div>
+  <div class="card"><h3 style="margin-top:0">Which Schedule C line for each category?</h3>
+   <p class="muted">Pre-filled from the category names. Change any that are wrong. This is saved and used for every year.</p>
+   ${cats.map(c=>`<label>${esc(c)}</label><select data-c="${esc(c)}">${SCHED_C.map(([k,l])=>`<option value="${k}" ${lineFor(c,map)===k?'selected':''}>${k} · ${esc(l)}</option>`).join('')}</select>`).join('')}</div>
+  <div class="card"><div style="display:flex;justify-content:space-between"><h3 style="margin:0">Year-end checklist</h3><span class="muted">${done} of ${TAX_TODO.length}</span></div>
+   ${TAX_TODO.map(([k,l])=>`<label style="display:flex;gap:10px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" style="width:auto" data-k="${k}" ${chk[k]?'checked':''}>${esc(l)}</label>`).join('')}
+   <p class="muted" style="margin-bottom:0">1099-NEC forms for contractors are generally due January 31 and the fourth-quarter estimated payment mid-January. Dates can shift, so confirm with the IRS or your accountant.</p></div>
+  <div class="card"><h3 style="margin-top:0">Blank IRS forms</h3><p class="muted">Official PDFs from irs.gov. Save the ones you fill in under <b>Tax Docs</b>.</p>
+   ${IRS_FORMS.map(([l,f])=>`<div style="padding:6px 0"><a href="https://www.irs.gov/pub/irs-pdf/${f}.pdf" target="_blank" rel="noopener">${esc(l)} ↗</a></div>`).join('')}
+   <p class="muted" style="margin-bottom:0">The IRS 1099-NEC “Copy A” sent to the IRS is a special red-ink form that can’t be printed from this PDF.</p></div>`;
+  bindYear();$('#tprint').onclick=printWorksheet;
+  $('#tcsv').onclick=()=>download(`schedule-c-worksheet-${year}.csv`,'Line,Expense,Amount\n'+sc.rows.map(x=>[x.line,q(x.label),x.amount.toFixed(2)].join(',')).join('\n')+`\n28,Total expenses,${sc.total.toFixed(2)}`);
+  document.querySelectorAll('select[data-c]').forEach(s=>s.onchange=()=>{setTaxSetting(st=>{st.taxMap={...(st.taxMap||{}),[s.dataset.c]:s.value}});render()});
+  document.querySelectorAll('input[data-k]').forEach(c=>c.onchange=()=>{setTaxSetting(st=>{const m={...(st.taxChk||{})};m[year]={...(m[year]||{}),[c.dataset.k]:c.checked};st.taxChk=m});render()});
+}
+
+// ---------- tax documents (uploaded forms, saved to Google Drive) ----------
+const MAX_DOC=15*1024*1024;
+function docUrl(d){return fetch(d.file).then(r=>r.blob()).then(b=>URL.createObjectURL(b))}
+async function openDoc(d){const w=window.open('about:blank','_blank');const u=await docUrl(d);if(w)w.location.href=u;else window.open(u,'_blank')}
+async function saveDocFile(d){const a=document.createElement('a');a.href=await docUrl(d);a.download=d.fname||'tax-document';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),4000)}
+function vTaxDocs(){
+  const list=taxdocs.filter(d=>String(d.year)===year);
+  $('#main').innerHTML=`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">Tax documents</h3>${yearPicker()}</div>
+   <p class="muted">Keep your printable tax forms here: W-9s, 1099s you received, estimated payment confirmations, filled-in Schedule C or anything your accountant sends. Files are saved with your other data to Google Drive. Open one to print it.</p>
+   <div class="actions"><button class="btn" id="dadd">＋ Add tax document</button></div></div>
+  <div class="card">${list.length?list.map(d=>`<div class="item" style="cursor:default">
+     ${/^image\//.test(d.mime||'')&&d.file?`<img class="thumb" src="${d.file}" alt="">`:`<div class="thumb">📄</div>`}
+     <div class="main"><div class="t">${esc(d.title||d.fname||d.type)}</div><div class="s">${esc(d.type)}${d.fname?` · ${esc(d.fname)}`:''}${d.notes?` · ${esc(d.notes)}`:''}</div>
+      <div class="actions" style="margin-top:6px"><button class="btn sec" data-o="${d.id}">Open / print</button><button class="btn sec" data-d="${d.id}">Download</button><button class="btn sec" data-e="${d.id}">Edit</button></div></div></div>`).join(''):`<p class="muted">No tax documents for ${year} yet.</p>`}</div>`;
+  bindYear();$('#dadd').onclick=()=>docForm();
+  const byId=id=>taxdocs.find(x=>x.id===id);
+  document.querySelectorAll('[data-o]').forEach(b=>b.onclick=()=>openDoc(byId(b.dataset.o)));
+  document.querySelectorAll('[data-d]').forEach(b=>b.onclick=()=>saveDocFile(byId(b.dataset.d)));
+  document.querySelectorAll('[data-e]').forEach(b=>b.onclick=()=>docForm(byId(b.dataset.e)));
+}
+function docForm(d){inForm=true;const isNew=!d;
+  let file=d?.file||'',mime=d?.mime||'',fname=d?.fname||'',fid=d?.fid||'';
+  const yrs=[...new Set([...years(),String(new Date().getFullYear()+1)])].sort().reverse();
+  $('#main').innerHTML=`<div class="card"><h3 style="margin-top:0">${isNew?'Add':'Edit'} tax document</h3>
+   <div class="row"><div><label>Tax year</label><select id="dy">${yrs.map(y=>`<option ${y===String(d?.year||year)?'selected':''}>${y}</option>`).join('')}</select></div>
+   <div><label>Type</label><select id="dt">${TAX_TYPES.map(t=>`<option ${t===d?.type?'selected':''}>${esc(t)}</option>`).join('')}</select></div></div>
+   <label>Title</label><input id="dn" value="${esc(d?.title||'')}" placeholder="For example: 1099-NEC from Acme Corp">
+   <label>Notes (optional)</label><textarea id="dno" rows="2">${esc(d?.notes||'')}</textarea>
+   <label>File (PDF or photo, up to 15 MB)</label><input type="file" id="df" accept="application/pdf,image/*"><div class="muted" id="dfn">${fname?esc(fname):'No file chosen yet.'}</div>
+   <p class="muted" id="dmsg" aria-live="polite"></p>
+   <div class="actions"><button class="btn" id="dsave">Save</button><button class="btn sec" id="dcancel">Cancel</button>${isNew?'':'<button class="btn del" id="ddel">Delete</button>'}</div></div>`;
+  $('#df').onchange=async e=>{const f=e.target.files[0];if(!f)return;const m=$('#dmsg');m.textContent='';
+    try{if(/^image\//.test(f.type)){file=await compress(f,2400,0.85);mime='image/jpeg'}
+      else if(f.type==='application/pdf'||/\.pdf$/i.test(f.name)){if(f.size>MAX_DOC)throw new Error('That PDF is over 15 MB. Try a smaller copy.');file=await toURL(new Blob([f],{type:'application/pdf'}));mime='application/pdf'}
+      else throw new Error('Choose a PDF or a photo.');
+      fname=f.name;fid=uid();$('#dfn').textContent=f.name;if(!$('#dn').value.trim())$('#dn').value=f.name.replace(/\.[^.]+$/,'')}
+    catch(x){m.textContent=x.message;file=d?.file||'';mime=d?.mime||'';fname=d?.fname||'';fid=d?.fid||''}};
+  $('#dcancel').onclick=()=>render();
+  $('#dsave').onclick=async()=>{if(!file){$('#dmsg').textContent='Choose a file first.';return}
+    const rec={...(d||{}),id:d?.id||uid(),year:$('#dy').value,type:$('#dt').value,title:$('#dn').value.trim(),notes:$('#dno').value.trim(),file,mime,fname,fid,updated:Date.now()};
+    if(d&&d.fid&&d.fid!==fid)queueDel(`f_${d.fid}`);
+    year=rec.year;await put('taxdocs',rec);await load();render();autoSync()};
+  if(!isNew)$('#ddel').onclick=async()=>{if(confirm('Delete this tax document?')){queueDel(`d_${d.id}.json`);if(d.fid)queueDel(`f_${d.fid}`);await rm('taxdocs',d.id);await load();render();autoSync()}};
+}
 
 // ---------- boot ----------
 openDB().then(load).then(render).then(autoSync).catch(e=>{$('#main').innerHTML='<div class="card">Storage unavailable: '+esc(e.message||e)+'</div>'});
