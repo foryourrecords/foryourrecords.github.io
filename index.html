@@ -170,7 +170,9 @@ function loadTess(){return tessLoad||(tessLoad=new Promise((res,rej)=>{const s=d
   s.src='https://cdnjs.cloudflare.com/ajax/libs/tesseract.js/5.1.1/tesseract.min.js';
   s.onload=()=>res(window.Tesseract);s.onerror=()=>{tessLoad=null;rej(new Error('Could not load the receipt reader. Check your internet connection.'))};document.head.appendChild(s)}))}
 async function ocr(dataUrl,onProgress){const T=await loadTess();
-  const r=await T.recognize(dataUrl,'eng',{logger:m=>{if(m.status==='recognizing text'&&onProgress)onProgress(Math.round(m.progress*100))}});return r.data.text}
+  const r=await T.recognize(dataUrl,'eng',{logger:m=>{if(m.status==='recognizing text'&&onProgress)onProgress(Math.round(m.progress*100))}});
+  ocrLines=(r.data.lines||[]).map(l=>({text:l.text.trim(),conf:l.confidence,y:l.bbox.y0}));return r.data.text}
+let ocrLines=[];
 
 // compress image to JPEG data URL
 function compress(file,max=1600,q=0.75){return new Promise((res,rej)=>{
@@ -568,8 +570,30 @@ function cleanMapLine(raw){
   return s;}
 // The From and To boxes at the top of a Google Maps directions screen (everything above the mode / time / distance row).
 // When Maps used "Your location" as the start, `from` is blank and fromIsMyLocation is true.
+// Street addresses are found directly ("2208 Bainbridge Dr"): number, street name, street type. Icons and map labels around them are ignored.
+const STREET_RE=/\b\d{1,6}[A-Za-z]?\s+(?:[NSEW]{1,2}\.?\s+)?(?:[A-Za-z0-9.'’-]+\s+){0,3}?(?:St|Street|Ave|Avenue|Rd|Road|Dr|Drive|Blvd|Boulevard|Ln|Lane|Way|Ct|Court|Hwy|Highway|Pkwy|Parkway|Pl|Place|Cir|Circle|Trl|Trail|Ter|Terrace|Pike|Rte|Route|Loop|Sq|Square)\b\.?(?:\s+(?:NE|NW|SE|SW|N|S|E|W)\b)?(?:,?\s+(?:Apt|Suite|Ste|Unit|#)\s*[A-Za-z0-9-]+)?/i;
 function parseRouteAddresses(text){
-  const lines=String(text||'').split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+  const all=String(text||'').split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
+  const stopRe=l=>/^(driving|transit|walking|cycling|biking|rideshare|flights?)\b/i.test(l)||/^drive\b/i.test(l)
+    ||/\b\d+\s*(?:min|mins|hr|hrs|h)\b/i.test(l)||/\b\d+(?:[.,]\d+)?\s*(?:mi|miles|km)\b/i.test(l);
+  // 1) street addresses at the top of the screen (everything above the mode / time / distance row)
+  {const stop0=all.findIndex(stopRe),top=all.slice(0,stop0<0?all.length:stop0);
+   const found=[];let mine0=false;
+   for(const l of top){const m=l.match(STREET_RE);
+     if(m&&!/\b\d{1,2}:\d{2}\b/.test(l.slice(0,m.index))){
+       // a business name before the number is kept ("Acme Plant, 500 Industrial Rd"); icon junk is not.
+       let pre=cleanMapLine(l.slice(0,m.index));pre=(/[A-Za-z]{3,}/.test(pre)?pre.replace(/[\s,]+$/,'')+', ':'');
+       let rest=l.slice(m.index+m[0].length),cut=false;
+       if(/^\s*,/.test(rest)){rest=rest.replace(/(…|\.\.\.)\s*$/,()=>{cut=true;return ''});
+         let go=true;while(go){go=false;const r2=rest.replace(/\s+(?:[^A-Za-z0-9]+|[a-z][A-Za-z]?|[A-Z][a-z])$/,'');if(r2!==rest){rest=r2;go=true}}}
+       else{cut=/(…|\.\.\.)\s*$/.test(rest);rest=''}
+       found.push({s:(pre+m[0]+rest).replace(/\s+/g,' ').trim(),cut});}
+     else if(/\b(your|my|current)\s+location\b/i.test(l))mine0=true;
+     if(found.length>=2)break;}
+   if(found.length>=2)return {found:true,from:found[0].s,to:found[1].s,fromIsMyLocation:false,truncated:{from:found[0].cut,to:found[1].cut}};
+   if(found.length===1&&mine0)return {found:true,from:'',to:found[0].s,fromIsMyLocation:true,truncated:{from:false,to:found[0].cut}};}
+  // 2) place names or partial text: use the lines above the route row
+  const lines=all.filter(l=>!/\b\d{1,2}:\d{2}\b/.test(l));
   const stop=lines.findIndex(l=>/^(driving|transit|walking|cycling|biking|rideshare|flights?)\b/i.test(l)
     ||/\b\d+\s*(?:min|mins|hr|hrs|h)\b/i.test(l)||/\b\d+(?:[.,]\d+)?\s*(?:mi|miles|km)\b/i.test(l));
   if(stop<1)return {found:false};
