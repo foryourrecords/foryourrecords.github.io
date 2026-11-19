@@ -1233,7 +1233,7 @@ function worksheetBody(){
   ${sc.rows.map(x=>`<tr><td>${x.line}</td><td>${esc(x.label)}<br><small>${x.cats.map(([k,v])=>`${esc(k)} ${money(v)}`).join(' · ')}${x.line==='24b'?` · total spent ${money(x.gross)}, 50% deducted`:''}${x.mileage?`${x.cats.length?' · ':''}standard mileage ${T.t.length?`${sc.miles.toFixed(1)} mi × ${money(S.rate)} = `:''}${money(x.mileage)}`:''}</small></td><td class="r">${money(x.amount)}</td></tr>`).join('')||'<tr><td colspan="3">No expenses recorded for this year.</td></tr>'}
   <tr><td><b>28</b></td><td><b>Total expenses</b></td><td class="r"><b>${money(sc.total)}</b></td></tr></table>
   <h2>Vehicle (Schedule C, Part IV)</h2>
-  <p>Business miles: <b>${sc.miles.toFixed(1)}</b> across ${T.t.length} trips · Standard mileage rate used: ${money(S.rate)} per mile · Deduction: <b>${money(sc.mileDed)}</b></p>
+  <p>Business miles: <b>${sc.miles.toFixed(1)}</b> across ${T.t.length} trip${T.t.length===1?'':'s'} · Standard mileage rate used: ${money(S.rate)} per mile · Deduction: <b>${money(sc.mileDed)}</b></p>
   <p><small>Using the standard mileage rate generally covers gas, repairs and similar car costs. Check with your preparer before also deducting those. Parking and tolls can be added on top.</small></p>`}
 function printWorksheet(){$('#report').innerHTML=worksheetBody();setTimeout(()=>window.print(),150)}
 function vTaxForms(){
