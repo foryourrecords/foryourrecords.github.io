@@ -230,7 +230,7 @@ function vSummary(){
   ${auditCard()}
   ${clientCard(T)}
   <div class="card"><h3 style="margin-top:0">Export ${year}</h3>
-   <div class="actions"><button class="btn" id="pkg">📦 Accountant package (ZIP)</button><button class="btn sec" id="stmx">🧾 Client statement</button><button class="btn sec" id="qbx">📗 QuickBooks export</button></div>
+   <div class="actions"><button class="btn" id="pkg">📦 Accountant package (ZIP)</button><button class="btn sec" id="stmx">🧾 Client statement</button><button class="btn sec" id="qbx">📗 QuickBooks / Xero export</button></div>
    <p class="muted">One file for your accountant: summary, receipts and mileage spreadsheets, a printable report, and every receipt photo sorted by category.</p>
    <div class="actions"><button class="btn sec" id="csvR">Receipts CSV</button><button class="btn sec" id="csvT">Mileage CSV</button><button class="btn sec" id="pdf">PDF report with photos</button></div>
    <p class="muted">The report includes your receipt photos. Open it and use Print → Save as PDF.</p></div>`;
@@ -699,6 +699,15 @@ function qbDetailCsv(recs,incomeList,opt){opt=opt||{};
   const all=[...(recs||[]).filter(r=>(Number(r.amount)||0)>0&&qbDate(r.date)).map(r=>({iso:r.date,cells:[qbDate(r.date),r.vendor||'',r.category||'',r.notes||'',(Math.round(Number(r.amount)*100)/100).toFixed(2),r.client||'',r.billable?'Yes':'',(r.photos||[]).length?'Yes':'No','Expense']}))];
   if(opt.withIncome)for(const x of incomeList||[]){if(x.kind&&x.kind!=='income')continue;if((Number(x.amount)||0)>0&&qbDate(x.date))all.push({iso:x.date,cells:[qbDate(x.date),x.client||'',x.client?'':'Income',x.note||'',(Math.round(Number(x.amount)*100)/100).toFixed(2),x.client||'','','','Income']})}
   all.sort((a,b)=>a.iso.localeCompare(b.iso));for(const a of all)lines.push(a.cells.map(qbCell).join(','));return lines.join('\r\n')+'\r\n'}
+// Xero's CSV bank statement import: Date and Amount are required; Payee, Description and Reference add detail.
+// Income and expenses share one Amount column (expenses negative). Dates are written YYYY-MM-DD so Xero never has to guess the order.
+function xeroRows(recs,incomeList,opt){opt=opt||{};const rows=[],iso=d=>/^\d{4}-\d{2}-\d{2}/.test(String(d||''))?String(d).slice(0,10):'';
+  for(const r of recs||[]){const a=Math.round((Number(r.amount)||0)*100)/100,d=iso(r.date);if(!(a>0)||!d)continue;
+    rows.push({iso:d,date:d,amount:-a,payee:String(r.vendor||'').trim()||'Expense',desc:[r.notes,r.client?`Client: ${r.client}`:''].map(x=>String(x||'').trim()).filter(Boolean).join(' · '),ref:opt.withCategory?String(r.category||'').trim():''})}
+  if(opt.withIncome)for(const x of incomeList||[]){if(x.kind&&x.kind!=='income')continue;const a=Math.round((Number(x.amount)||0)*100)/100,d=iso(x.date);if(!(a>0)||!d)continue;
+    rows.push({iso:d,date:d,amount:a,payee:String(x.client||'').trim()||'Payment received',desc:String(x.note||'').trim(),ref:opt.withCategory?'Income':''})}
+  return rows.sort((a,b)=>a.iso.localeCompare(b.iso)||a.payee.localeCompare(b.payee))}
+const xeroCsv=rows=>['Date,Amount,Payee,Description,Reference',...rows.map(r=>[r.date,r.amount.toFixed(2),qbCell(r.payee),qbCell(r.desc),qbCell(r.ref)].join(','))].join('\r\n')+'\r\n';
 // ---- end QuickBooks export logic ----
 
 // ---- home office logic (pure) ----
@@ -1590,23 +1599,27 @@ function qbData(){const T=totals(),inc=incomeRecs.filter(x=>x.kind==='income'&&S
   return {T,inc,o,rows:qbRows(T.r,inc,o)}}
 function vQbExport(){
   const D=qbData(),parts=qbChunks(D.rows),exp=D.rows.filter(r=>r.amount<0).length;
-  $('#main').innerHTML=`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">QuickBooks export</h3>${yearPicker()}</div>
-   <p class="muted">Makes a file you can upload into QuickBooks Online, with your ${year} receipts as money-out lines (${exp} expense${exp===1?'':'s'}${qbo.inc?`, ${D.rows.length-exp} income`:''}). QuickBooks' basic upload only takes a date, a description and an amount, so your own categories can't come along. Use the options below to help you sort them once they are in.</p>
-   <label style="display:flex;gap:10px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" style="width:auto" data-q="cat" ${qbo.cat?'checked':''}>Add the category to each description (for example “Staples Supplies”)</label>
+  $('#main').innerHTML=`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">QuickBooks and Xero export</h3>${yearPicker()}</div>
+   <p class="muted">Makes files you can upload into QuickBooks Online or Xero, with your ${year} receipts as money-out lines (${exp} expense${exp===1?'':'s'}${qbo.inc?`, ${D.rows.length-exp} income`:''}). QuickBooks' basic upload only takes a date, a description and an amount, so your own categories can't come along. Xero can keep the payee, a note and the category as a reference.</p>
+   <label style="display:flex;gap:10px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" style="width:auto" data-q="cat" ${qbo.cat?'checked':''}>Add the category (to the QuickBooks description, for example “Staples Supplies”, and to the Xero reference)</label>
    <label style="display:flex;gap:10px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" style="width:auto" data-q="nodig" ${qbo.nodig?'checked':''}>Remove numbers and symbols from descriptions (QuickBooks can reject them)</label>
    <label style="display:flex;gap:10px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" style="width:auto" data-q="inc" ${qbo.inc?'checked':''}>Also include income I logged as deposits</label>
-   <div class="actions"><button class="btn" id="qbgo" ${D.rows.length?'':'disabled'}>⬇ QuickBooks upload file${parts.length>1?` (${parts.length} files in a ZIP)`:''}</button><button class="btn sec" id="qbdet" ${D.T.r.length?'':'disabled'}>⬇ Detailed CSV</button></div>
+   <div class="actions"><button class="btn" id="qbgo" ${D.rows.length?'':'disabled'}>⬇ QuickBooks upload file${parts.length>1?` (${parts.length} files in a ZIP)`:''}</button><button class="btn" id="xrgo" ${D.rows.length?'':'disabled'}>⬇ Xero statement file</button><button class="btn sec" id="qbdet" ${D.T.r.length?'':'disabled'}>⬇ Detailed CSV</button></div>
    <p class="muted" id="qbmsg" aria-live="polite">${D.rows.length?'':`No receipts for ${year} yet.`}</p></div>
-  <div class="card"><h3 style="margin-top:0">How to upload</h3><ol class="muted" style="padding-left:18px;margin:0">
+  <div class="card"><h3 style="margin-top:0">How to upload to QuickBooks</h3><ol class="muted" style="padding-left:18px;margin:0">
    <li>In QuickBooks Online, open <b>Banking</b> (called <b>Transactions → Bank transactions</b> in some versions) and choose <b>Upload transactions</b>. Pick the file you just downloaded.</li>
    <li>Choose the account to put them in. Use a cash or “receipts” account, not your real bank account.</li>
    <li>Map the columns: Date, Description, Amount (one column, money out is negative). Set the date format to <b>MM/DD/YYYY</b>.</li>
    <li>Review the lines, select them, and accept. Then give each one its category.</li></ol></div>
+  <div class="card"><h3 style="margin-top:0">How to upload to Xero</h3><ol class="muted" style="padding-left:18px;margin:0">
+   <li>In Xero, open <b>Accounting → Bank accounts</b> and pick the account for these expenses (a cash or “receipts” account, not your real bank account). Choose <b>Import a statement</b> and select the Xero file.</li>
+   <li>Match the columns: Date, Amount, Payee, Description, Reference. Dates are written like 2026-03-09, so there is no day and month mix-up.</li>
+   <li>Review the lines, then import. Then reconcile each one and choose its account.</li></ol></div>
   <div class="card"><h3 style="margin-top:0">Before you upload</h3><ul class="muted" style="padding-left:18px;margin:0">
    <li><b>Avoid duplicates.</b> If these purchases already came through your bank or card connection in QuickBooks, don't upload them again.</li>
    <li><b>Mileage</b> isn't a bank transaction, so it isn't in this file. Your accountant records it as one entry. The mileage log and totals are in the accountant package.</li>
    <li>The detailed CSV keeps the vendor, category, client, notes and whether there is a photo, for your accountant or for spreadsheets.</li>
-   <li>Files over 900 lines are split, because QuickBooks limits each upload to 1,000 lines and 350 KB. QuickBooks screens and menu names change, so follow its on-screen prompts if they differ.</li></ul>
+   <li>QuickBooks files over 900 lines are split, because it limits each upload to 1,000 lines and 350 KB. QuickBooks and Xero change their screens and menu names, so follow their on-screen prompts if they differ.</li></ul>
    <div class="actions"><button class="btn sec" id="qbback">Back to Summary</button></div></div>`;
   bindYear();
   document.querySelectorAll('[data-q]').forEach(c=>c.onchange=()=>{qbo[c.dataset.q]=c.checked;vQbExport()});
@@ -1615,6 +1628,7 @@ function vQbExport(){
     if(parts.length<=1)download(`quickbooks-upload-${year}.csv`,qbCsv(D.rows));
     else{const enc=new TextEncoder();download(`quickbooks-upload-${year}.zip`,makeZip(parts.map((p,i)=>({name:`quickbooks-upload-${year}-part${i+1}.csv`,data:enc.encode(qbCsv(p))}))),'application/zip')}
     $('#qbmsg').textContent=`Downloaded ${D.rows.length} line${D.rows.length===1?'':'s'}.`};
+  $('#xrgo').onclick=()=>{download(`xero-statement-${year}.csv`,xeroCsv(xeroRows(D.T.r,D.inc,D.o)));$('#qbmsg').textContent=`Downloaded ${D.rows.length} line${D.rows.length===1?'':'s'} for Xero.`};
   $('#qbdet').onclick=()=>{download(`quickbooks-detailed-${year}.csv`,qbDetailCsv(D.T.r,D.inc,D.o));$('#qbmsg').textContent='Downloaded the detailed CSV.'};
 }
 
