@@ -196,7 +196,7 @@ let inForm=false;
 function render(){
   inForm=false;updateStatus();
   document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('on',b.dataset.v===view));
-  ({summary:vSummary,receipts:vReceipts,mileage:vMileage,esttax:vEstTax,bank:vBank,taxforms:vTaxForms,taxdocs:vTaxDocs,settings:vSettings})[view]();
+  ({summary:vSummary,receipts:vReceipts,mileage:vMileage,audit:vAudit,esttax:vEstTax,bank:vBank,taxforms:vTaxForms,taxdocs:vTaxDocs,settings:vSettings})[view]();
 }
 document.getElementById('nav').onclick=e=>{if(e.target.dataset.v){view=e.target.dataset.v;render();window.scrollTo(0,0)}};
 
@@ -227,13 +227,14 @@ function vSummary(){
    <p class="muted" style="margin-bottom:0">Using the standard mileage rate? It already covers most car costs such as gas and repairs, so ask your accountant before deducting those separately.</p></div>
   <div class="card"><h3 style="margin-top:0">By category</h3>
    ${Object.keys(T.by).length?`<table>${Object.entries(T.by).sort((a,b)=>b[1]-a[1]).map(([k,v])=>`<tr><td>${esc(k)}</td><td class="r">${money(v)}</td></tr>`).join('')}</table>`:'<p class="muted">No receipts this year yet.</p>'}</div>
+  ${auditCard()}
   ${clientCard(T)}
   <div class="card"><h3 style="margin-top:0">Export ${year}</h3>
    <div class="actions"><button class="btn" id="pkg">📦 Accountant package (ZIP)</button><button class="btn sec" id="stmx">🧾 Client statement</button></div>
    <p class="muted">One file for your accountant: summary, receipts and mileage spreadsheets, a printable report, and every receipt photo sorted by category.</p>
    <div class="actions"><button class="btn sec" id="csvR">Receipts CSV</button><button class="btn sec" id="csvT">Mileage CSV</button><button class="btn sec" id="pdf">PDF report with photos</button></div>
    <p class="muted">The report includes your receipt photos. Open it and use Print → Save as PDF.</p></div>`;
-  wireHome();bindYear();$('#pkg').onclick=e=>packageExport(e.currentTarget);$('#stmx').onclick=()=>statementView();
+  wireHome();bindYear();const ag=$('#auditgo');if(ag)ag.onclick=()=>{view='audit';render();window.scrollTo(0,0)};$('#pkg').onclick=e=>packageExport(e.currentTarget);$('#stmx').onclick=()=>statementView();
   document.querySelectorAll('.stmbtn').forEach(b=>b.onclick=()=>statementView(b.dataset.c));$('#csvR').onclick=()=>csv('receipts');$('#csvT').onclick=()=>csv('trips');$('#pdf').onclick=report;
 }
 
@@ -674,6 +675,56 @@ function rateLabel(rate,trips){
   const rs=[...new Set((trips||[]).map(t=>rate(t.date)))].sort((a,b)=>a-b);
   return rs.length?`${rs.map(centsLabel).join(' and ')} per mile, by trip date`:'IRS rate by trip date';}
 // ---- end mileage rate logic ----
+
+// ---- audit check logic (pure) ----
+// Looks for the things an IRS examiner asks about first: mileage log details, receipts for larger expenses, business-meal notes, duplicates.
+const AUDIT_MEAL=/meal|food|dining|restaurant|entertain/i,AUDIT_LODGE=/lodg|hotel/i;
+const MONTH_NAMES=['January','February','March','April','May','June','July','August','September','October','November','December'];
+function auditCheck(recs,trips,opt){
+  opt=opt||{};const todayIso=opt.today||new Date().toISOString().slice(0,10),year=String(opt.year||todayIso.slice(0,4)),F=[];
+  const num=x=>Number(x)||0,hasPhoto=x=>(x.photos||[]).length>0,odo=v=>v!==null&&v!==undefined&&v!==''&&!isNaN(Number(v));
+  const norm=s=>String(s||'').toLowerCase().replace(/[^a-z0-9]+/g,'');
+  const rItem=r=>({kind:'receipt',id:r.id,text:`${r.date} · ${r.vendor||'(no vendor)'} · $${num(r.amount).toFixed(2)}`});
+  const tItem=t=>({kind:'trip',id:t.id,text:`${t.date} · ${t.from||'?'} → ${t.to||'?'} · ${num(t.miles)} mi`});
+  const add=(id,group,sev,title,why,items)=>{if(items.length)F.push({id,group,sev,title,why,items})};
+  const dayGap=(a,b)=>Math.abs(Date.UTC(+a.slice(0,4),+a.slice(5,7)-1,+a.slice(8,10))-Date.UTC(+b.slice(0,4),+b.slice(5,7)-1,+b.slice(8,10)))/86400000;
+  // ---- mileage log ----
+  add('m-purpose','Mileage','high','Trips with no business purpose','The IRS requires the business reason for every trip in a mileage log. Without it the trip can be disallowed.',trips.filter(t=>!String(t.purpose||'').trim()).map(tItem));
+  add('m-miles','Mileage','high','Trips with no miles','A trip without miles cannot be counted.',trips.filter(t=>!(num(t.miles)>0)).map(tItem));
+  add('m-dest','Mileage','warn','Trips with no destination','A mileage log needs the place you drove to.',trips.filter(t=>!String(t.to||'').trim()).map(tItem));
+  add('m-future','Mileage','warn','Trips dated in the future','Check the date. Records should be made at or near the time of the trip.',trips.filter(t=>t.date>todayIso).map(tItem));
+  {const seen=new Map(),dups=[];for(const t of trips){const k=[t.date,norm(t.from),norm(t.to),num(t.miles)].join('|');if(seen.has(k)){if(!dups.includes(seen.get(k)))dups.push(seen.get(k));dups.push(t)}else seen.set(k,t)}
+   add('m-dup','Mileage','warn','Possible duplicate trips','The same date, route and miles appear more than once. Double-counted miles are a common audit finding.',dups.map(tItem))}
+  add('m-odo','Mileage','warn','Odometer readings that do not add up','The end reading should be higher than the start, and the difference should match the miles.',
+    trips.filter(t=>odo(t.odoStart)&&odo(t.odoEnd)&&(num(t.odoEnd)<=num(t.odoStart)||Math.abs(num(t.miles)-(num(t.odoEnd)-num(t.odoStart)))>0.5)).map(tItem));
+  add('m-proof','Mileage','info','Trips with no proof attached','A route screenshot or odometer readings make a trip much easier to defend.',trips.filter(t=>!hasPhoto(t)&&!(odo(t.odoStart)&&odo(t.odoEnd))).map(tItem));
+  add('m-long','Mileage','info','Very long single trips (over 300 miles)','Not a problem by itself. Make sure the miles and purpose are right.',trips.filter(t=>num(t.miles)>300).map(tItem));
+  {const noOdo=trips.filter(t=>!odo(t.odoStart)&&num(t.miles)>0),whole=noOdo.filter(t=>Number.isInteger(num(t.miles)));
+   if(noOdo.length>=10&&whole.length/noOdo.length>=0.7)add('m-round','Mileage','info','Many round-number mileage entries',`${whole.length} of ${noOdo.length} trips have whole-number miles. Examiners read that as estimating. Exact miles from a map or odometer are safer.`,whole.map(tItem))}
+  // ---- receipts ----
+  add('r-photo','Receipts','high','Larger expenses with no receipt photo','The IRS generally wants a receipt or invoice for business expenses of $75 or more, and for all lodging.',recs.filter(r=>!hasPhoto(r)&&(num(r.amount)>=75||AUDIT_LODGE.test(r.category||''))).map(rItem));
+  add('r-meal','Receipts','warn','Business meals with no note','For a business meal, write who you met and the business reason in the notes.',recs.filter(r=>AUDIT_MEAL.test(r.category||'')&&!String(r.notes||'').trim()).map(rItem));
+  add('r-vendor','Receipts','warn','Receipts with no vendor','Each expense should say who was paid.',recs.filter(r=>!String(r.vendor||'').trim()).map(rItem));
+  add('r-cat','Receipts','warn','Receipts with no category','Expenses should be sorted into a category so they can be reported on the right tax line.',recs.filter(r=>!String(r.category||'').trim()).map(rItem));
+  add('r-zero','Receipts','warn','Receipts with no amount','An expense with a zero or missing amount cannot be deducted.',recs.filter(r=>!(num(r.amount)>0)).map(rItem));
+  add('r-future','Receipts','warn','Receipts dated in the future','Check the date.',recs.filter(r=>r.date>todayIso).map(rItem));
+  {const sorted=recs.filter(r=>num(r.amount)>0).sort((a,b)=>(norm(a.vendor)+'|'+num(a.amount).toFixed(2)+'|'+a.date).localeCompare(norm(b.vendor)+'|'+num(b.amount).toFixed(2)+'|'+b.date)),dups=[];
+   for(let i=1;i<sorted.length;i++){const a=sorted[i-1],b=sorted[i];
+     if(norm(a.vendor)===norm(b.vendor)&&num(a.amount)===num(b.amount)&&dayGap(a.date,b.date)<=1){if(!dups.includes(a))dups.push(a);if(!dups.includes(b))dups.push(b)}}
+   add('r-dup','Receipts','warn','Possible duplicate receipts','Same vendor and amount on the same or next day. Remove the extra one if it is a double entry.',dups.map(rItem))}
+  {const total=recs.reduce((s,r)=>s+num(r.amount),0),other=recs.filter(r=>/^other$/i.test(String(r.category||'').trim()));const ot=other.reduce((s,r)=>s+num(r.amount),0);
+   if(total>0&&ot>=500&&ot/total>0.1)add('r-other','Receipts','info','A lot of spending is in "Other"',`$${ot.toFixed(2)} (${Math.round(ot/total*100)}%) is in "Other". Specific categories are easier to explain.`,other.map(rItem))}
+  // ---- records over time ----
+  if(recs.length||trips.length){const cur=todayIso.slice(0,4)===year,last=cur?+todayIso.slice(5,7)-1:12,gaps=[];
+    for(let m=1;m<=last;m++){const p=`${year}-${String(m).padStart(2,'0')}`;if(!recs.some(r=>String(r.date).startsWith(p))&&!trips.some(t=>String(t.date).startsWith(p)))gaps.push({kind:'none',text:MONTH_NAMES[m-1]})}
+    add('g-months','Records','info','Months with no records at all','A month with nothing may mean entries were never made. Fine if you really had no business activity.',gaps)}
+  return F}
+function auditScore(findings){
+  const w={high:6,warn:3,info:1},cap={high:36,warn:18,info:4};let lost=0;
+  for(const f of findings)lost+=Math.min(cap[f.sev],w[f.sev]*f.items.length);
+  const score=Math.max(0,100-Math.round(lost));
+  return {score,label:score>=90?'Audit-ready':score>=70?'Mostly ready':'Needs work'}}
+// ---- end audit check logic ----
 
 // ---- estimated tax logic (pure) ----
 // A rough federal estimate for a self-employed person. IRS figures for 2025 and 2026 (Rev. Proc. 2025-32, SSA wage base).
@@ -1488,6 +1539,38 @@ function incomeForm(r,kind){inForm=true;const isNew=!r,pay=kind==='payment';
     if(pay){rec.year=$('#iy').value;rec.quarter=+$('#iq').value;rec.type=$('#it').value;year=rec.year}else{rec.client=$('#ic').value.trim();year=d.slice(0,4)}
     await put('income',rec);await load();render();autoSync()};
   if(!isNew)$('#idel').onclick=async()=>{if(confirm('Delete this entry?')){queueDel(`i_${r.id}.json`);await rm('income',r.id);await load();render();autoSync()}};
+}
+
+// ---------- audit-readiness check ----------
+function auditFindings(){
+  const T=totals(),F=auditCheck(T.r,T.t,{today:today(),year}),S=settings(),cur=String(new Date().getFullYear());
+  // checks that need the rest of the app
+  if(S.rateMode==='custom'&&T.t.length){const flat=T.t.reduce((s,x)=>s+(Number(x.miles)||0)*(Number(S.rate)||0),0),irs=mileageAmount(T.t,irsRate),d=flat-irs;
+    if(Math.abs(d)>=1)F.push({id:'x-rate',group:'Tax setup',sev:d>0?'warn':'info',title:'You use your own flat mileage rate',why:`Your rate gives ${money(flat)} for ${year}. The IRS rates by trip date give ${money(irs)}${d>0?', so you may be claiming more than the standard rate allows':''}. Turn on the IRS rate in Settings unless you have a reason not to.`,items:[{kind:'none',text:`Difference: ${money(d)}`}]})}
+  try{const C=estCalc(),old=Number(year)<Number(cur)||today()>year+'-04-15';
+    if(C.inc>0&&C.est.needed>=1000&&!C.pays.some(p=>p.type!=='state')&&old)F.push({id:'x-est',group:'Tax setup',sev:'warn',title:'No estimated tax payments logged',why:`Your estimate is ${money(C.est.needed)}. If you paid, log it on the Est. Tax tab. If you did not, an underpayment penalty may apply.`,items:[{kind:'none',text:'Open the Est. Tax tab'}]})}catch(e){}
+  const chk=(S.taxChk||{})[year]||{},done=TAX_TODO.filter(([k])=>chk[k]).length;
+  if((Number(year)<Number(cur)||new Date().getMonth()>=10)&&done<TAX_TODO.length&&(T.r.length||T.t.length))F.push({id:'x-todo',group:'Tax setup',sev:'info',title:'Year-end checklist not finished',why:`${done} of ${TAX_TODO.length} items are ticked on the Tax Forms tab.`,items:TAX_TODO.filter(([k])=>!chk[k]).map(([k,l])=>({kind:'none',text:l}))});
+  return F}
+function auditCard(){
+  const F=auditFindings(),S=auditScore(F),n=F.reduce((a,f)=>a+(f.sev==='info'?0:f.items.length),0);
+  if(!F.length&&!totals().r.length&&!totals().t.length)return '';
+  return `<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><div><h3 style="margin:0">Audit readiness: ${S.score}/100</h3><div class="muted">${S.label}${n?` · ${n} thing${n===1?'':'s'} to fix or check`:''}</div></div><button class="btn sec" id="auditgo">Review</button></div></div>`}
+function vAudit(){
+  const F=auditFindings(),S=auditScore(F),by={high:0,warn:0,info:0};F.forEach(f=>by[f.sev]+=f.items.length);
+  const SEV={high:['Fix','var(--danger)'],warn:['Check','#b45309'],info:['Note','var(--muted)']};
+  const order={high:0,warn:1,info:2},sorted=[...F].sort((a,b)=>order[a.sev]-order[b.sev]);
+  $('#main').innerHTML=`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">Audit-readiness check</h3>${yearPicker()}</div>
+   <p class="muted">Looks through your ${year} records for the things the IRS asks about first: mileage log details, receipts for larger expenses, business-meal notes and duplicates. It cannot tell you whether a deduction is allowed, only whether your records would hold up.</p>
+   <div class="stats"><div class="stat"><b>${S.score}/100</b><span>${S.label}</span></div><div class="stat"><b>${by.high}</b><span>to fix</span></div><div class="stat"><b>${by.warn}</b><span>to check</span></div><div class="stat"><b>${by.info}</b><span>notes</span></div></div></div>
+   ${sorted.length?sorted.map(f=>{const [lab,col]=SEV[f.sev],shown=f.items.slice(0,8),rest=f.items.slice(8),row=i=>i.kind==='none'?`<div style="padding:6px 0;border-top:1px solid var(--line)">${esc(i.text)}</div>`:`<div style="padding:6px 0;border-top:1px solid var(--line);cursor:pointer;display:flex;justify-content:space-between;gap:8px" data-ak="${i.kind}" data-ai="${esc(i.id)}"><span>${esc(i.text)}</span><span class="muted">Open ›</span></div>`;
+     return `<div class="card"><div style="display:flex;gap:8px;align-items:center"><span style="border:1px solid ${col};color:${col};border-radius:999px;padding:1px 10px;font-size:12px;font-weight:600">${lab}</span><b>${esc(f.title)}</b><span class="muted">(${f.items.length})</span></div>
+      <p class="muted" style="margin:6px 0">${esc(f.why)}</p>${shown.map(row).join('')}${rest.length?`<details><summary class="muted" style="padding:6px 0;cursor:pointer">Show ${rest.length} more</summary>${rest.map(row).join('')}</details>`:''}</div>`}).join('')
+    :`<div class="card"><h3 style="margin-top:0">Nothing found</h3><p class="muted" style="margin-bottom:0">${totals().r.length||totals().t.length?'Your records for this year look complete.':'No receipts or trips for this year yet.'}</p></div>`}
+   <p class="muted">This is a record-keeping checklist, not tax or legal advice. Keep receipts and mileage records for at least three years after you file.</p>`;
+  bindYear();
+  document.querySelectorAll('[data-ak]').forEach(e=>e.onclick=()=>{
+    if(e.dataset.ak==='receipt'){const r=receipts.find(x=>x.id===e.dataset.ai);if(r)receiptForm(r)}else{const t=trips.find(x=>x.id===e.dataset.ai);if(t)tripForm(t)}});
 }
 
 // ---------- bank statement import ----------
