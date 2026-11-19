@@ -470,8 +470,13 @@ function tripForm(t,prefillMiles){
   // Add the city, state and ZIP that Google Maps leaves off. The street or place name stays exactly as read;
   // the lookup is biased to your saved starting address so "Bonsack" means the Bonsack near you.
   const completeFields=async()=>{
-    const near0=(settings().home||'').trim(),changed=[],problems=[];let near=null;
+    // The area to search: your starting address from Settings, else the newest saved trip address that has a state or ZIP.
+    // Without any known area a street name could match another state, so nothing is guessed.
+    const near0=(settings().home||'').trim()||((trips||[]).slice().sort((a,b)=>String(b.date).localeCompare(String(a.date))).flatMap(t=>[t.to,t.from]).find(a=>a&&hasStateZip(a))||''),changed=[],problems=[];let near=null;
     if(near0){try{near=await geocode(near0)}catch(e){}}
+    if(!near){const fv=$('#f').value.trim(),tv=$('#t').value.trim(),known=[fv,tv].find(a=>a&&hasStateZip(a));
+      if(known){try{near=await geocode(known)}catch(e){}}}
+    if(!near){problems.push('I don’t know what area you are in, so I did not guess a city. Save your starting address (with city and state) in Settings, or type the city and state in the To field.');return {changed,problems}}
     const one=async(label,id)=>{const val=$('#'+id).value.trim();if(!val||hasStateZip(val))return;
       try{const g=await geocode(val,near,true);
         if(near&&hav(near,g)>150){problems.push(`${label} “${val}” was found ${Math.round(hav(near,g))} miles from your starting address, so I left it alone. Add the city and state yourself.`);return}
@@ -847,9 +852,11 @@ async function geocode(addr,near,needAddr){
   // prefer results close to the starting point (a soft hint, not a limit)
   const bias=near?`&viewbox=${near.lon-0.7},${near.lat+0.7},${near.lon+0.7},${near.lat-0.7}`:'';
   for(const cand of addressCandidates(addr)){
+    // with a known area, search only inside it first ("Mountain Pass Rd" exists in many states), then anywhere
+    for(const bounded of (near?[true,false]:[false])){
     const wait=1100-(Date.now()-lastGeo);if(wait>0)await new Promise(r=>setTimeout(r,wait));lastGeo=Date.now();
-    const j=await fetchJson('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&addressdetails=1&q='+encodeURIComponent(cand)+bias);
-    if(j&&j[0]){const p={lat:+j[0].lat,lon:+j[0].lon,name:j[0].display_name||cand,addr:j[0].address||null};cache[key]=p;saveGeo(cache);return p}}
+    const j=await fetchJson('https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&addressdetails=1&q='+encodeURIComponent(cand)+bias+(bounded?'&bounded=1':''));
+    if(j&&j[0]){const p={lat:+j[0].lat,lon:+j[0].lon,name:j[0].display_name||cand,addr:j[0].address||null};cache[key]=p;saveGeo(cache);return p}}}
   throw new Error(`Couldn't find "${addr}" on the map. A full street address works best.`);}
 const MAX_EST_MILES=250;
 async function estimateMiles(from,to){
