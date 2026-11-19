@@ -513,9 +513,20 @@ function tripForm(t,prefillMiles){
         if(r.ok)msg.textContent+=` Also filled ${r.parts.join(' · ')}.${r.note}`}
     }catch(e){msg.textContent=e.message||'Could not read the screenshot.'}
     reading=false;};
-  $('#gmap').onclick=()=>{const to=$('#t').value.trim();if(!to){$('#rmsg').textContent='Fill in the “To” address first.';return}
-    window.open(mapsDirUrl($('#f').value.trim(),to),'_blank','noopener');
-    $('#rmsg').textContent='Google Maps opened. When the route is showing, take a screenshot, come back here, and tap “Add route screenshot”.'};
+  // Add the city, state and ZIP first so Google Maps finds the right place, then open the route.
+  $('#gmap').onclick=async()=>{const msg=$('#rmsg');if(!$('#t').value.trim()){msg.textContent='Fill in the “To” address first.';return}
+    if(reading)return;reading=true;
+    const w=window.open('about:blank','_blank');   // opened right away so phone pop-up blockers allow it
+    let note='';
+    try{msg.textContent='Adding city, state and ZIP, then opening Google Maps…';
+      const c=await completeFields();
+      if(c.changed.length)note=` I added the city, state and ZIP: ${c.changed.join(' · ')}.`;
+      if(c.problems.length)note+=' '+c.problems.join(' ')}
+    catch(e){}
+    const url=mapsDirUrl($('#f').value.trim(),$('#t').value.trim());
+    if(w){try{w.opener=null}catch(e){}w.location.href=url}else window.open(url,'_blank','noopener');
+    msg.textContent='Google Maps opened.'+note+' When the route is showing, take a screenshot, come back here, and tap “Add route screenshot”.';
+    reading=false};
   $('#rshot').onclick=()=>$('#rf').click();
   $('#rf').onchange=async e=>{const wasEmpty=photos.length===0;
     for(const f of e.target.files){try{photos.push(await compress(f,2200,0.8));pids.push(uid())}catch(x){alert(x.message)}}
