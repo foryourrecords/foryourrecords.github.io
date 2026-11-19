@@ -203,11 +203,14 @@ document.getElementById('nav').onclick=e=>{if(e.target.dataset.v){view=e.target.
 function yearPicker(){return `<select id="yr" style="width:auto">${years().map(y=>`<option ${y===year?'selected':''}>${y}</option>`).join('')}</select>`}
 function bindYear(){const y=$('#yr');if(y)y.onchange=()=>{year=y.value;render()}}
 
+// Mileage rate in use: the IRS rate for each trip's date (default), or the flat rate typed in Settings.
+function rateFn(){const s=settings();return s.rateMode==='custom'?(Number(s.rate)||0):irsRate}
+const rateFor=d=>rateOf(rateFn(),d);
 function totals(){
   const r=receipts.filter(x=>x.date.startsWith(year)),t=trips.filter(x=>x.date.startsWith(year));
   const by={};r.forEach(x=>by[x.category]=(by[x.category]||0)+Number(x.amount));
   const spent=r.reduce((a,x)=>a+Number(x.amount),0),miles=t.reduce((a,x)=>a+Number(x.miles),0);
-  return {r,t,by,spent,miles,ded:miles*settings().rate};
+  return {r,t,by,spent,miles,ded:mileageAmount(t,rateFn()),rateNote:rateLabel(rateFn(),t)};
 }
 
 function vSummary(){
@@ -218,7 +221,7 @@ function vSummary(){
    <div class="stats" style="margin-top:12px">
     <div class="stat"><b>${money(T.spent)}</b><span>Receipts (${T.r.length})</span></div>
     <div class="stat"><b>${T.miles.toFixed(1)} mi</b><span>Business miles (${T.t.length} trips)</span></div>
-    <div class="stat"><b>${money(T.ded)}</b><span>Mileage deduction @ ${money(settings().rate)}/mi</span></div>
+    <div class="stat"><b>${money(T.ded)}</b><span>Mileage deduction (${esc(T.rateNote)})</span></div>
     <div class="stat"><b>${money(T.spent+T.ded)}</b><span>Total deductible</span></div>
    </div>
    <p class="muted" style="margin-bottom:0">Using the standard mileage rate? It already covers most car costs such as gas and repairs, so ask your accountant before deducting those separately.</p></div>
@@ -245,8 +248,7 @@ function csv(kind){
   if(kind==='receipts'){
     download(`receipts-${year}.csv`,'Date,Vendor,Category,Client,Billable,Amount,Notes,Has Photo\n'+[...T.r].sort((a,b)=>a.date.localeCompare(b.date)).map(x=>[x.date,q(x.vendor),q(x.category),q(x.client),x.billable?'Yes':'',Number(x.amount).toFixed(2),q(x.notes),(x.photos||[]).length?'Yes':'No'].join(',')).join('\n'));
   }else{
-    const rate=settings().rate;
-    download(`mileage-${year}.csv`,'Date,From,To,Purpose,Client,Billable,Odometer Start,Odometer End,Miles,Round Trip,Deduction,Has Screenshot\n'+[...T.t].sort((a,b)=>a.date.localeCompare(b.date)).map(x=>[x.date,q(x.from),q(x.to),q(x.purpose),q(x.client),x.billable?'Yes':'',x.odoStart??'',x.odoEnd??'',Number(x.miles).toFixed(1),x.roundTrip?'Yes':'',(x.miles*rate).toFixed(2),(x.photos||[]).length?'Yes':'No'].join(',')).join('\n'));
+    download(`mileage-${year}.csv`,'Date,From,To,Purpose,Client,Billable,Odometer Start,Odometer End,Miles,Round Trip,Deduction,Has Screenshot\n'+[...T.t].sort((a,b)=>a.date.localeCompare(b.date)).map(x=>[x.date,q(x.from),q(x.to),q(x.purpose),q(x.client),x.billable?'Yes':'',x.odoStart??'',x.odoEnd??'',Number(x.miles).toFixed(1),x.roundTrip?'Yes':'',(x.miles*rateFor(x.date)).toFixed(2),(x.photos||[]).length?'Yes':'No'].join(',')).join('\n'));
   }
 }
 async function report(){
@@ -258,10 +260,10 @@ async function report(){
   }else{$('#report').innerHTML=body;setTimeout(()=>window.print(),150);}
 }
 function reportBody(srcOf=x=>x.photos||[]){
-  const T=totals(),rate=settings().rate;
+  const T=totals();
   const rs=[...T.r].sort((a,b)=>a.date.localeCompare(b.date)),ts=[...T.t].sort((a,b)=>a.date.localeCompare(b.date));
   return `<h1>Expense &amp; Mileage Report — ${year}</h1>
-  <p>Receipts: <b>${money(T.spent)}</b> · Miles: <b>${T.miles.toFixed(1)}</b> × ${money(rate)} = <b>${money(T.ded)}</b> · Total: <b>${money(T.spent+T.ded)}</b></p>
+  <p>Receipts: <b>${money(T.spent)}</b> · Miles: <b>${T.miles.toFixed(1)}</b> (${esc(T.rateNote)}) = <b>${money(T.ded)}</b> · Total: <b>${money(T.spent+T.ded)}</b></p>
   <h2>By category</h2><table>${Object.entries(T.by).map(([k,v])=>`<tr><td>${esc(k)}</td><td class="r">${money(v)}</td></tr>`).join('')}</table>
   <h2>Mileage log</h2><table><tr><th>Date</th><th>From → To</th><th>Purpose</th><th class="r">Miles</th></tr>${ts.map(x=>`<tr><td>${x.date}</td><td>${esc(x.from)} → ${esc(x.to)}</td><td>${esc(x.purpose)}</td><td class="r">${Number(x.miles).toFixed(1)}</td></tr>`).join('')}</table>
   <h2>Receipts</h2>${rs.map(x=>`<div class="rimg"><b>${x.date} — ${esc(x.vendor)}</b> · ${esc(x.category)} · ${money(x.amount)}${x.notes?`<br>${esc(x.notes)}`:''}<br>${srcOf(x).map(p=>`<img src="${p}">`).join('')}</div>`).join('')}`;
@@ -295,7 +297,7 @@ const slug=(s,n=28)=>String(s||'').normalize('NFKD').replace(/[^\w]+/g,'-').repl
 const REPORT_CSS='body{font:14px system-ui,sans-serif;max-width:800px;margin:20px auto;padding:0 16px;color:#000}table{width:100%;border-collapse:collapse}td,th{padding:5px 4px;border-bottom:1px solid #ccc;text-align:left}.r{text-align:right}.rimg{break-inside:avoid;margin:10px 0}.rimg img{max-width:100%;max-height:420px;display:block;margin:4px 0}@media print{button{display:none}}';
 
 function buildPackageFiles(){
-  const T=totals(),rate=settings().rate,enc=new TextEncoder();
+  const T=totals(),enc=new TextEncoder();
   const rs=[...T.r].sort((a,b)=>a.date.localeCompare(b.date)),ts=[...T.t].sort((a,b)=>a.date.localeCompare(b.date));
   const files=[],used=new Set(),paths=new Map();
   rs.forEach(x=>{const cat=slug(x.category,20),list=[];paths.set(x.id,list);
@@ -315,16 +317,16 @@ function buildPackageFiles(){
   const n2=v=>Number(Number(v).toFixed(2));
   files.push({name:'Receipts.csv',data:csvOf([['Date','Vendor','Category','Client','Billable','Amount','Notes','Receipt file(s)'],
     ...rs.map(x=>[x.date,x.vendor,x.category,x.client||'',x.billable?'Yes':'',n2(x.amount),x.notes||'',(paths.get(x.id)||[]).join('; ')]),['','','TOTAL','','',n2(T.spent),'',''] ])});
-  files.push({name:'Mileage-Log.csv',data:csvOf([['Date','From','To','Business purpose','Client','Billable','Odometer start','Odometer end','Miles','Round trip','Deduction ($)','Route screenshot(s)'],
-    ...ts.map(x=>[x.date,x.from||'',x.to||'',x.purpose||'',x.client||'',x.billable?'Yes':'',x.odoStart??'',x.odoEnd??'',Number(Number(x.miles).toFixed(1)),x.roundTrip?'Yes':'',n2(x.miles*rate),(tpaths.get(x.id)||[]).join('; ')]),
-    ['','','','TOTAL','','','','',Number(T.miles.toFixed(1)),'',n2(T.ded),''] ])});
-  const bc=byClient(T.r,T.t,rate);
+  files.push({name:'Mileage-Log.csv',data:csvOf([['Date','From','To','Business purpose','Client','Billable','Odometer start','Odometer end','Miles','Round trip','Rate ($ per mile)','Deduction ($)','Route screenshot(s)'],
+    ...ts.map(x=>[x.date,x.from||'',x.to||'',x.purpose||'',x.client||'',x.billable?'Yes':'',x.odoStart??'',x.odoEnd??'',Number(Number(x.miles).toFixed(1)),x.roundTrip?'Yes':'',rateFor(x.date),n2(x.miles*rateFor(x.date)),(tpaths.get(x.id)||[]).join('; ')]),
+    ['','','','TOTAL','','','','',Number(T.miles.toFixed(1)),'','',n2(T.ded),''] ])});
+  const bc=byClient(T.r,T.t,rateFn());
   files.push({name:'By-Client.csv',data:csvOf([['Client','Receipts ($)','Receipt count','Miles','Mileage ($)','Billable ($)','To invoice ($)','Total ($)'],
-    ...bc.map(r=>[r.client||'(no client)',n2(r.receipts),r.rcount,Number(r.miles.toFixed(1)),n2(r.miles*rate),n2(r.billable),n2(r.toInvoice),n2(r.receipts+r.miles*rate)]),
+    ...bc.map(r=>[r.client||'(no client)',n2(r.receipts),r.rcount,Number(r.miles.toFixed(1)),n2(r.mileAmt),n2(r.billable),n2(r.toInvoice),n2(r.receipts+r.mileAmt)]),
     ['TOTAL',n2(T.spent),T.r.length,Number(T.miles.toFixed(1)),n2(T.ded),n2(bc.reduce((a,r)=>a+r.billable,0)),n2(bc.reduce((a,r)=>a+r.toInvoice,0)),n2(T.spent+T.ded)] ])});
   files.push({name:'Summary.csv',data:csvOf([['Category','Total ($)'],
     ...Object.entries(T.by).sort((a,b)=>b[1]-a[1]).map(([k,v])=>[k,n2(v)]),
-    ['Receipts total',n2(T.spent)],['',''],['Business miles',Number(T.miles.toFixed(1))],['Mileage rate ($ per mile)',rate],['Mileage deduction ($)',n2(T.ded)],['',''],['Total deductible ($)',n2(T.spent+T.ded)] ])});
+    ['Receipts total',n2(T.spent)],['',''],['Business miles',Number(T.miles.toFixed(1))],['Mileage rate used',T.rateNote],['Mileage deduction ($)',n2(T.ded)],['',''],['Total deductible ($)',n2(T.spent+T.ded)] ])});
   const html=`<!doctype html><html><head><meta charset="utf-8"><title>Expense Report ${year}</title><style>${REPORT_CSS}</style></head><body><button onclick="print()">Print / Save as PDF</button>${reportBody(x=>paths.get(x.id)||[])}</body></html>`;
   files.push({name:'Report.html',data:enc.encode(html)});
   files.push({name:'README.txt',data:enc.encode(
@@ -339,7 +341,7 @@ Report.html      Printable report (open it, then Print > Save as PDF)
 receipts/        Receipt photos, sorted into a folder per category
 mileage-proof/   Route screenshots saved with trips, when you added them
 
-Mileage rate used: $${rate} per mile. Confirm it matches the IRS standard rate for ${year}.
+Mileage rate used: ${T.rateNote}. Confirm it matches the IRS standard rate for ${year}.
 This package lists what was entered in the app. It is not tax advice.
 `)});
   return {files,count:{r:rs.length,t:ts.length,p:files.filter(f=>f.name.startsWith('receipts/')).length}};
@@ -658,6 +660,21 @@ function completeAddress(partial,a){
   return [p,loc].filter(Boolean).join(', ')+', '+st+(zip?' '+zip:'');}
 // ---- end address completion ----
 
+// ---- mileage rate logic (pure) ----
+// IRS standard business mileage rates, by the date a trip was driven. 2026 changed mid-year (IRS Announcement 2026-11).
+const IRS_RATES=[['2021-01-01',0.56],['2022-01-01',0.585],['2022-07-01',0.625],['2023-01-01',0.655],['2024-01-01',0.67],['2025-01-01',0.70],['2026-01-01',0.725],['2026-07-01',0.76]];
+const IRS_RATES_THROUGH='2026-12-31';   // newest year this table covers
+function irsRate(date){let r=IRS_RATES[0][1];for(const [from,v] of IRS_RATES)if(String(date)>=from)r=v;return r}
+const centsLabel=r=>`${+(r*100).toFixed(1)}¢`;
+// A rate is either a plain number (one rate for every trip) or a function of the trip date.
+const rateOf=(rate,date)=>typeof rate==='function'?rate(date):(Number(rate)||0);
+function mileageAmount(trips,rate){return (trips||[]).reduce((s,t)=>s+(Number(t.miles)||0)*rateOf(rate,t.date),0)}
+function rateLabel(rate,trips){
+  if(typeof rate!=='function')return `${centsLabel(Number(rate)||0)} per mile`;
+  const rs=[...new Set((trips||[]).map(t=>rate(t.date)))].sort((a,b)=>a-b);
+  return rs.length?`${rs.map(centsLabel).join(' and ')} per mile, by trip date`:'IRS rate by trip date';}
+// ---- end mileage rate logic ----
+
 // ---- estimated tax logic (pure) ----
 // A rough federal estimate for a self-employed person. IRS figures for 2025 and 2026 (Rev. Proc. 2025-32, SSA wage base).
 // Not included: credits, additional Medicare tax, net investment income tax, AMT, itemized deductions, state detail.
@@ -871,10 +888,11 @@ function applyPreset(cur,p,opt){return {...cur,profession:p.id,categories:mergeC
 function canonClient(v,names){const t=String(v||'').replace(/\s+/g,' ').trim();if(!t)return '';const hit=(names||[]).find(n=>n.toLowerCase()===t.toLowerCase());return hit||t}
 // Totals per client for a set of receipts and trips. Items with no client are grouped last.
 function byClient(rs,ts,rate){
-  const m=new Map(),row=n=>{const k=n||'';if(!m.has(k))m.set(k,{client:k,receipts:0,rcount:0,miles:0,tcount:0,billable:0,toInvoice:0});return m.get(k)};
+  const m=new Map(),row=n=>{const k=n||'';if(!m.has(k))m.set(k,{client:k,receipts:0,rcount:0,miles:0,mileAmt:0,tcount:0,billable:0,toInvoice:0});return m.get(k)};
   rs.forEach(x=>{const o=row(x.client),a=Number(x.amount)||0;o.receipts+=a;o.rcount++;if(x.billable){o.billable+=a;if(!x.invoiced)o.toInvoice+=a}});
-  ts.forEach(x=>{const o=row(x.client),a=(Number(x.miles)||0)*rate;o.miles+=Number(x.miles)||0;o.tcount++;if(x.billable){o.billable+=a;if(!x.invoiced)o.toInvoice+=a}});
-  return [...m.values()].sort((a,b)=>((a.client==='')-(b.client===''))||((b.receipts+b.miles*rate)-(a.receipts+a.miles*rate)));
+  // `rate` is a number or a function of the trip date; mileAmt is the money value of that client's miles
+  ts.forEach(x=>{const o=row(x.client),a=(Number(x.miles)||0)*(typeof rate==='function'?rate(x.date):(Number(rate)||0));o.miles+=Number(x.miles)||0;o.mileAmt+=a;o.tcount++;if(x.billable){o.billable+=a;if(!x.invoiced)o.toInvoice+=a}});
+  return [...m.values()].sort((a,b)=>((a.client==='')-(b.client===''))||((b.receipts+b.mileAmt)-(a.receipts+a.mileAmt)));
 }
 // ---- end client logic ----
 function purposeNames(){const out=[],seen=new Set();
@@ -890,7 +908,7 @@ function onboardView(rerun){
    ${PRESETS.map(p=>`<label style="display:flex;gap:10px;align-items:flex-start;color:var(--text);padding:10px;border:1px solid var(--line);border-radius:10px;margin:6px 0;font-size:16px"><input type="radio" name="pr" value="${p.id}" style="width:auto;margin-top:4px" ${cur===p.id?'checked':''}><span><b>${esc(p.name)}</b><br><span class="muted">${esc(p.desc)}</span></span></label>`).join('')}
    <label>Your business name (shown on client statements)</label><input id="ob1" value="${esc(s.bizName||'')}">
    <label>Where your trips usually start (street address)</label><input id="ob2" value="${esc(s.home||'')}" placeholder="e.g. 123 Main St, Roanoke VA">
-   <label>Mileage rate ($ per mile). Check the current IRS standard rate.</label><input id="ob3" type="number" step="0.001" inputmode="decimal" value="${s.rate}">
+   <label>Your own flat mileage rate ($ per mile). Optional: the app uses the IRS rate for each trip's date unless you turn that off in Settings.</label><input id="ob3" type="number" step="0.001" inputmode="decimal" value="${s.rate}">
    <label style="display:flex;gap:8px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" id="ob4" style="width:auto" ${rerun?'':'checked'}> Replace my current categories with this set (otherwise only missing ones are added)</label>
    <div class="actions"><button class="btn" id="obgo">Save and continue</button><button class="btn sec" id="obskip">${rerun?'Cancel':'Skip for now'}</button></div>
    <p class="muted" id="obmsg" aria-live="polite"></p></div>`;
@@ -922,10 +940,10 @@ function wireHome(){
 const clientNames=()=>{const s=new Set((settings().clients||[]).map(x=>String(x).trim()).filter(Boolean));[...receipts,...trips].forEach(x=>{if(x.client)s.add(x.client)});return [...s].sort((a,b)=>a.localeCompare(b))};
 const clientDatalist=()=>`<datalist id="clients">${clientNames().map(c=>`<option value="${esc(c)}">`).join('')}</datalist>`;
 function clientCard(T){
-  const rate=settings().rate,rows=byClient(T.r,T.t,rate);
+  const rows=byClient(T.r,T.t,rateFn());
   if(!rows.length)return '';
   return `<div class="card"><h3 style="margin-top:0">By client</h3>`+(rows.some(r=>r.client)?
-    `<div style="overflow-x:auto"><table><tr><th>Client</th><th class="r">Receipts</th><th class="r">Mileage</th><th class="r">To invoice</th></tr>${rows.map(r=>`<tr><td>${esc(r.client||'No client')}${r.client?`<br><button class="btn sec stmbtn" data-c="${esc(r.client)}" style="padding:4px 10px;font-size:13px;margin-top:4px">Statement</button>`:''}</td><td class="r">${money(r.receipts)}</td><td class="r">${money(r.miles*rate)}<br><span class="muted">${r.miles.toFixed(1)} mi</span></td><td class="r">${money(r.toInvoice)}${Math.abs(r.billable-r.toInvoice)>0.004?`<br><span class="muted">of ${money(r.billable)} billable</span>`:''}</td></tr>`).join('')}</table></div><p class="muted">“To invoice” is billable items you haven't marked as invoiced yet. Mileage is miles × your rate.</p>`
+    `<div style="overflow-x:auto"><table><tr><th>Client</th><th class="r">Receipts</th><th class="r">Mileage</th><th class="r">To invoice</th></tr>${rows.map(r=>`<tr><td>${esc(r.client||'No client')}${r.client?`<br><button class="btn sec stmbtn" data-c="${esc(r.client)}" style="padding:4px 10px;font-size:13px;margin-top:4px">Statement</button>`:''}</td><td class="r">${money(r.receipts)}</td><td class="r">${money(r.mileAmt)}<br><span class="muted">${r.miles.toFixed(1)} mi</span></td><td class="r">${money(r.toInvoice)}${Math.abs(r.billable-r.toInvoice)>0.004?`<br><span class="muted">of ${money(r.billable)} billable</span>`:''}</td></tr>`).join('')}</table></div><p class="muted">“To invoice” is billable items you haven't marked as invoiced yet. Mileage is miles × the rate for each trip's date.</p>`
     :'<p class="muted">Add a client to your receipts and trips to see totals for each one here.</p>')+'</div>';
 }
 
@@ -940,7 +958,7 @@ function statementItems(recs,tripList,client,opt){
 // Each mileage line is rounded to cents first, so the lines always add up to the printed total.
 function statementTotals(rs,ts,rate){
   const exp=cents(rs.reduce((a,x)=>a+cents(x.amount),0));
-  const lines=ts.map(t=>({t,amt:cents((Number(t.miles)||0)*rate)}));
+  const lines=ts.map(t=>({t,amt:cents((Number(t.miles)||0)*(typeof rate==='function'?rate(t.date):(Number(rate)||0)))}));
   const mile=cents(lines.reduce((a,l)=>a+l.amt,0));
   return {exp,mile,miles:Math.round(ts.reduce((a,t)=>a+(Number(t.miles)||0),0)*10)/10,total:cents(exp+mile),lines};
 }
@@ -949,7 +967,7 @@ function statementBody(o){
   const contact=String(o.contact||'').split('\n').map(l=>esc(l.trim())).filter(Boolean).join('<br>');
   const period=o.from||o.to?`${esc(o.from||'start')} to ${esc(o.to||'today')}`:'All dates';
   const expTable=o.receipts.length?`<table><tr><th>Date</th><th>Description</th><th>Category</th><th class="r">Amount</th></tr>${o.receipts.map(x=>`<tr><td>${esc(x.date)}</td><td>${esc(x.vendor)}${x.notes?`<div class="n">${esc(x.notes)}</div>`:''}</td><td>${esc(x.category)}</td><td class="r">${money(x.amount)}</td></tr>`).join('')}</table>`:'<p class="n">No expenses on this statement.</p>';
-  const milTable=o.trips.length?`<table><tr><th>Date</th><th>Trip</th><th class="r">Miles</th><th class="r">Amount</th></tr>${T.lines.map(({t,amt})=>`<tr><td>${esc(t.date)}</td><td>${esc(t.from||'')}${t.from&&t.to?' → ':''}${esc(t.to||'')}${t.roundTrip?' (round trip)':''}${t.purpose?`<div class="n">${esc(t.purpose)}</div>`:''}</td><td class="r">${Number(t.miles).toFixed(1)}</td><td class="r">${money(amt)}</td></tr>`).join('')}</table><p class="n">Mileage billed at ${money(o.rate)} per mile.</p>`:'<p class="n">No mileage on this statement.</p>';
+  const milTable=o.trips.length?`<table><tr><th>Date</th><th>Trip</th><th class="r">Miles</th><th class="r">Amount</th></tr>${T.lines.map(({t,amt})=>`<tr><td>${esc(t.date)}</td><td>${esc(t.from||'')}${t.from&&t.to?' → ':''}${esc(t.to||'')}${t.roundTrip?' (round trip)':''}${t.purpose?`<div class="n">${esc(t.purpose)}</div>`:''}</td><td class="r">${Number(t.miles).toFixed(1)}</td><td class="r">${money(amt)}</td></tr>`).join('')}</table><p class="n">Mileage billed at ${esc(rateLabel(o.rate,o.trips))}.</p>`:'<p class="n">No mileage on this statement.</p>';
   const photos=o.photos?o.receipts.filter(x=>(x.photos||[]).length).map(x=>`<div class="rc"><b>${esc(x.date)} · ${esc(x.vendor)} · ${money(x.amount)}</b>${x.photos.map(p=>`<img src="${p}" alt="Receipt">`).join('')}</div>`).join(''):'';
   return `<style>.stm{font:14px/1.45 system-ui,Segoe UI,Arial,sans-serif;color:#000;max-width:800px;margin:0 auto}.stm h1{font-size:24px;margin:0 0 12px}.stm h2{font-size:16px;margin:22px 0 6px}.stm table{width:100%;border-collapse:collapse}.stm td,.stm th{padding:6px 4px;border-bottom:1px solid #ccc;text-align:left;vertical-align:top}.stm .r{text-align:right;white-space:nowrap}.stm .n{color:#555;font-size:12px}.stm .meta{display:flex;gap:28px;flex-wrap:wrap;margin-bottom:8px}.stm .meta>div{min-width:180px}.stm .tot{width:auto;margin-left:auto;margin-top:14px}.stm .tot td{border:0;padding:3px 8px}.stm .grand td{font-weight:700;font-size:16px;border-top:2px solid #000}.stm .rc{break-inside:avoid;margin:14px 0}.stm .rc img{display:block;max-width:100%;max-height:480px;margin:6px 0}</style>
   <div class="stm"><h1>Expense statement</h1>
@@ -970,7 +988,7 @@ function statementView(pre){
    <label>Client</label><select id="sc">${names.map(c=>`<option ${c===c0?'selected':''}>${esc(c)}</option>`).join('')}</select>
    <div class="row"><div><label>From (optional)</label><input type="date" id="sf"></div><div><label>To</label><input type="date" id="st" value="${today()}"></div></div>
    <label style="display:flex;gap:8px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" id="sun" style="width:auto" checked> Only items not yet invoiced</label>
-   <div class="row"><div><label>Statement number</label><input id="sn" value="${esc(numFor(c0))}"></div><div><label>Mileage rate to bill ($/mile)</label><input id="sr" type="number" step="0.001" inputmode="decimal" value="${settings().rate}"></div></div>
+   <div class="row"><div><label>Statement number</label><input id="sn" value="${esc(numFor(c0))}"></div><div><label>Mileage rate to bill ($/mile). Leave blank for the IRS rate on each trip date.</label><input id="sr" type="number" step="0.001" inputmode="decimal" value="${settings().rateMode==='custom'?settings().rate:''}" placeholder="IRS rate by date"></div></div>
    <label>Reference (PO or project, optional)</label><input id="sref">
    <label>Note to client (optional)</label><textarea id="snote" rows="2"></textarea>
    <label style="display:flex;gap:8px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" id="sph" style="width:auto" checked> Attach receipt photos</label>
@@ -979,7 +997,7 @@ function statementView(pre){
    <div class="actions"><button class="btn" id="sprint">Print / Save as PDF</button><button class="btn sec" id="sdl">Download file</button><button class="btn sec" id="sback">Back</button></div>
    <p class="muted" id="smsg" aria-live="polite"></p><div id="sdone"></div></div>`;
   let cur={receipts:[],trips:[]},numTouched=false;
-  const rate=()=>{const r=parseFloat($('#sr').value);return r>=0?r:settings().rate};
+  const rate=()=>{const r=parseFloat($('#sr').value);return r>=0?r:rateFn()};
   const picked=()=>{const ids=new Set([...document.querySelectorAll('.si:checked')].map(c=>c.dataset.k+c.dataset.id));
     return {receipts:cur.receipts.filter(x=>ids.has('r'+x.id)),trips:cur.trips.filter(x=>ids.has('t'+x.id))}};
   const totals2=()=>{const p=picked(),T=statementTotals(p.receipts,p.trips,rate());$('#stot').textContent=`Selected: ${p.receipts.length+p.trips.length} items · ${money(T.total)} (expenses ${money(T.exp)}, mileage ${money(T.mile)})`};
@@ -1243,7 +1261,9 @@ function vSettings(){
    <p class="muted" id="gstat"></p></div>
   <div class="card"><h3 style="margin-top:0">Settings</h3>
    <p class="muted">Work type: <b>${esc((PRESETS.find(p=>p.id===s.profession)||{}).name||'not set')}</b> <button class="btn sec" id="chprof" style="padding:4px 10px;font-size:13px;margin-left:6px">${s.profession?'Change':'Set up'}</button></p>
-   <label>Mileage rate ($ per mile) — check the current IRS standard rate</label><input type="number" step="0.001" id="rate" value="${s.rate}">
+   <label style="display:flex;gap:8px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" id="rmode" style="width:auto" ${s.rateMode!=='custom'?'checked':''}> Use the IRS standard rate for each trip's date (recommended)</label>
+   <p class="muted">Built in: ${IRS_RATES.slice(-4).map(([d,r])=>`${centsLabel(r)} from ${d}`).join(', ')}. Covers trips through ${IRS_RATES_THROUGH}. Later trips use the last rate until the app is updated.</p>
+   <label>Your own flat rate ($ per mile), used only when the box above is unchecked</label><input type="number" step="0.001" id="rate" value="${s.rate}">
    <label>Categories (one per line)</label><textarea id="cats" rows="8">${esc(s.categories.join('\n'))}</textarea>
    <label>Common trip reasons (one per line)</label><textarea id="plist" rows="4">${esc((s.purposes||[]).join('\n'))}</textarea>
    <label>Clients (optional, one per line; clients you use also appear automatically)</label><textarea id="clist" rows="4">${esc((s.clients||[]).join('\n'))}</textarea>
@@ -1262,7 +1282,7 @@ function vSettings(){
   $('#gc').onclick=()=>{const c=$('#cid').value.trim();if(!c){alert('Paste your Google client ID first.');return}setG({cid:c});syncNow(true)};
   $('#gd').onclick=()=>{try{if(tok)google.accounts.oauth2.revoke(tok)}catch(e){}tok=null;tokExp=0;syncErr='';setG({on:0});vSettings()};
   $('#ss').onclick=()=>{const r=parseFloat($('#rate').value),c=$('#cats').value.split('\n').map(x=>x.trim()).filter(Boolean);
-    if(isNaN(r)||!c.length){alert('Enter a valid rate and at least one category.');return}saveSettings({...settings(),rate:r,categories:c,autoscan:$('#autoscan').checked,purposes:$('#plist').value.split('\n').map(x=>x.trim()).filter(Boolean),clients:$('#clist').value.split('\n').map(x=>x.trim()).filter(Boolean),bizName:$('#bizn').value.trim(),bizContact:$('#bizc').value.trim(),clientRules:$('#crules').value.trim()});alert('Saved.')};
+    if(isNaN(r)||!c.length){alert('Enter a valid rate and at least one category.');return}saveSettings({...settings(),rate:r,rateMode:$('#rmode').checked?'irs':'custom',categories:c,autoscan:$('#autoscan').checked,purposes:$('#plist').value.split('\n').map(x=>x.trim()).filter(Boolean),clients:$('#clist').value.split('\n').map(x=>x.trim()).filter(Boolean),bizName:$('#bizn').value.trim(),bizContact:$('#bizc').value.trim(),clientRules:$('#crules').value.trim()});alert('Saved.')};
   $('#bk').onclick=()=>download(`expense-backup-${today()}.json`,JSON.stringify({v:1,settings:settings(),receipts,trips}),'application/json');
   $('#rs').onclick=()=>$('#rf').click();
   $('#rf').onchange=async e=>{const f=e.target.files[0];if(!f)return;
@@ -1525,16 +1545,16 @@ function vBank(){
 
 // ---------- tax forms (year-end worksheets) ----------
 function setTaxSetting(fn){const s=settings();fn(s);saveSettings(s);autoSync()}
-function taxData(){const T=totals(),s=settings();return scheduleC(T.r,T.miles,s.rate,s.taxMap)}
+function taxData(){const T=totals(),s=settings();return scheduleC(T.r,T.miles,T.miles>0?T.ded/T.miles:0,s.taxMap)}   // the average rate times the miles equals the by-date deduction
 function worksheetBody(){
   const S=settings(),sc=taxData(),T=totals(),biz=S.bizName||'';
   return `<h1>Schedule C Expense Worksheet — ${esc(year)}</h1>${biz?`<p><b>${esc(biz)}</b></p>`:''}
   <p>Prepared from the Expense &amp; Mileage Tracker for your tax preparer. It organizes expenses by Schedule C line. It is not a tax form and not tax advice. Income (line 1) is not tracked here.</p>
   <table><tr><th>Line</th><th>Expense</th><th class="r">Amount</th></tr>
-  ${sc.rows.map(x=>`<tr><td>${x.line}</td><td>${esc(x.label)}<br><small>${x.cats.map(([k,v])=>`${esc(k)} ${money(v)}`).join(' · ')}${x.line==='24b'?` · total spent ${money(x.gross)}, 50% deducted`:''}${x.mileage?`${x.cats.length?' · ':''}standard mileage ${T.t.length?`${sc.miles.toFixed(1)} mi × ${money(S.rate)} = `:''}${money(x.mileage)}`:''}</small></td><td class="r">${money(x.amount)}</td></tr>`).join('')||'<tr><td colspan="3">No expenses recorded for this year.</td></tr>'}
+  ${sc.rows.map(x=>`<tr><td>${x.line}</td><td>${esc(x.label)}<br><small>${x.cats.map(([k,v])=>`${esc(k)} ${money(v)}`).join(' · ')}${x.line==='24b'?` · total spent ${money(x.gross)}, 50% deducted`:''}${x.mileage?`${x.cats.length?' · ':''}standard mileage ${T.t.length?`${sc.miles.toFixed(1)} mi at ${esc(T.rateNote)} = `:''}${money(x.mileage)}`:''}</small></td><td class="r">${money(x.amount)}</td></tr>`).join('')||'<tr><td colspan="3">No expenses recorded for this year.</td></tr>'}
   <tr><td><b>28</b></td><td><b>Total expenses</b></td><td class="r"><b>${money(sc.total)}</b></td></tr></table>
   <h2>Vehicle (Schedule C, Part IV)</h2>
-  <p>Business miles: <b>${sc.miles.toFixed(1)}</b> across ${T.t.length} trip${T.t.length===1?'':'s'} · Standard mileage rate used: ${money(S.rate)} per mile · Deduction: <b>${money(sc.mileDed)}</b></p>
+  <p>Business miles: <b>${sc.miles.toFixed(1)}</b> across ${T.t.length} trip${T.t.length===1?'':'s'} · Standard mileage rate used: ${esc(T.rateNote)} · Deduction: <b>${money(sc.mileDed)}</b></p>
   <p><small>Using the standard mileage rate generally covers gas, repairs and similar car costs. Check with your preparer before also deducting those. Parking and tolls can be added on top.</small></p>`}
 function printWorksheet(){$('#report').innerHTML=worksheetBody();setTimeout(()=>window.print(),150)}
 function vTaxForms(){
