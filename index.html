@@ -196,7 +196,7 @@ let inForm=false;
 function render(){
   inForm=false;updateStatus();
   document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('on',b.dataset.v===view));
-  ({summary:vSummary,receipts:vReceipts,mileage:vMileage,audit:vAudit,esttax:vEstTax,bank:vBank,taxforms:vTaxForms,taxdocs:vTaxDocs,settings:vSettings})[view]();
+  ({summary:vSummary,receipts:vReceipts,mileage:vMileage,audit:vAudit,homeoffice:vHomeOffice,esttax:vEstTax,bank:vBank,taxforms:vTaxForms,taxdocs:vTaxDocs,settings:vSettings})[view]();
 }
 document.getElementById('nav').onclick=e=>{if(e.target.dataset.v){view=e.target.dataset.v;render();window.scrollTo(0,0)}};
 
@@ -675,6 +675,23 @@ function rateLabel(rate,trips){
   const rs=[...new Set((trips||[]).map(t=>rate(t.date)))].sort((a,b)=>a-b);
   return rs.length?`${rs.map(centsLabel).join(' and ')} per mile, by trip date`:'IRS rate by trip date';}
 // ---- end mileage rate logic ----
+
+// ---- home office logic (pure) ----
+// Business use of your home. Simplified method: $5 per square foot, up to 300 square feet (IRS Pub. 587). Actual method: the office share of home costs.
+const HO_RATE=5,HO_MAX_SQFT=300;
+const HO_COSTS=[['mortgageInterest','Mortgage interest'],['rent','Rent'],['propTax','Real estate taxes'],['insurance','Homeowners or renters insurance'],['utilities','Utilities (electric, gas, water, internet)'],['repairs','Repairs and maintenance'],['hoa','HOA fees'],['depreciation','Depreciation of the home (from your accountant)'],['other','Other home costs']];
+function homeOffice(o){
+  o=o||{};const num=x=>Math.max(0,Number(x)||0),months=Math.min(12,Math.max(1,Math.round(Number(o.months)||12))),frac=months/12;
+  const home=num(o.homeSqft),office=num(o.officeSqft),pct=home>0?Math.min(1,office/home):0,costs=o.costs||{};
+  const total=HO_COSTS.reduce((s,[k])=>s+num(costs[k]),0);
+  const simple=Math.round(Math.min(office,HO_MAX_SQFT)*HO_RATE*frac*100)/100,actual=Math.round(total*pct*frac*100)/100;
+  const method=o.method==='simple'?'simple':o.method==='actual'?'actual':(simple>=actual?'simple':'actual');
+  const raw=method==='simple'?simple:actual,limit=(o.limit===null||o.limit===undefined)?null:Math.max(0,Number(o.limit)||0);
+  const deduction=limit===null?raw:Math.min(raw,limit);
+  const warn=[];if(office>0&&home>0&&office>home)warn.push('The office cannot be bigger than the home.');
+  if(method==='simple'&&office>HO_MAX_SQFT)warn.push(`Only the first ${HO_MAX_SQFT} square feet count with the simplified method.`);
+  return {months,pct,total:Math.round(total*100)/100,simple,actual,method,raw,deduction:Math.round(deduction*100)/100,limited:limit!==null&&raw>limit,limit,warn}}
+// ---- end home office logic ----
 
 // ---- audit check logic (pure) ----
 // Looks for the things an IRS examiner asks about first: mileage log details, receipts for larger expenses, business-meal notes, duplicates.
@@ -1455,12 +1472,12 @@ function estCalc(){
   const E=estSet(),sc=taxData(),cur=String(new Date().getFullYear())===year;
   const proj=(E.proj==='annual'||(E.proj==='auto'&&cur))?projFactor(year):1;
   const inc=incomeRecs.filter(x=>x.kind==='income'&&String(x.date).startsWith(year)).reduce((s,x)=>s+(Number(x.amount)||0),0);
-  const est=estimateTax({year,income:inc*proj,expenses:sc.total*proj,status:E.status,other:E.other,withheld:E.withheld,qbi:E.qbi,stateRate:E.state});
+  const est=estimateTax({year,income:inc*proj,expenses:sc.total*proj+sc.home.deduction,status:E.status,other:E.other,withheld:E.withheld,qbi:E.qbi,stateRate:E.state});
   const shTotal=safeHarbor(est.federal,E.prior,E.priorHigh),shNeeded=shTotal===null?null:Math.max(0,c2(shTotal-E.withheld));
   const planTotal=E.plan==='safe'&&shNeeded!==null?shNeeded:est.needed;
   const pays=incomeRecs.filter(x=>x.kind==='payment'&&String(x.year)===year),fed=pays.filter(x=>x.type!=='state');
   const plan=planQuarters(planTotal,fed.map(x=>({quarter:+x.quarter||1,amount:x.amount})),qDueDates(year),today());
-  return {E,inc,proj,est,shNeeded,planTotal,plan,pays,statePaid:pays.filter(x=>x.type==='state').reduce((s,x)=>s+(Number(x.amount)||0),0),cur,expenses:sc.total};}
+  return {E,inc,proj,est,shNeeded,planTotal,plan,pays,statePaid:pays.filter(x=>x.type==='state').reduce((s,x)=>s+(Number(x.amount)||0),0),cur,expenses:sc.total,home:sc.home.deduction};}
 function vEstTax(){
   const C=estCalc(),{E,est,plan}=C,rows=incomeRecs.filter(x=>x.kind==='income'&&String(x.date).startsWith(year)),n=x=>Number(x)||0;
   const days=plan.next?Math.round((Date.parse(plan.next.due)-Date.parse(today()))/86400000):0;
@@ -1484,6 +1501,7 @@ function vEstTax(){
   <div class="card"><h3 style="margin-top:0">How it was figured</h3><table>
    <tr><td>Income${C.proj>1?' (projected)':''}</td><td class="r">${money(C.inc*C.proj)}</td></tr>
    <tr><td>Expenses (Schedule C total)${C.proj>1?' (projected)':''}</td><td class="r">−${money(C.expenses*C.proj)}</td></tr>
+   ${C.home>0?`<tr><td>Home office deduction</td><td class="r">−${money(C.home)}</td></tr>`:''}
    <tr><td><b>Net profit</b></td><td class="r"><b>${money(est.net)}</b></td></tr>
    <tr><td>Self-employment tax (15.3% of 92.35%)</td><td class="r">${money(est.se)}</td></tr>
    <tr><td>Other income (spouse, wages)</td><td class="r">${money(n(E.other))}</td></tr>
@@ -1539,6 +1557,43 @@ function incomeForm(r,kind){inForm=true;const isNew=!r,pay=kind==='payment';
     if(pay){rec.year=$('#iy').value;rec.quarter=+$('#iq').value;rec.type=$('#it').value;year=rec.year}else{rec.client=$('#ic').value.trim();year=d.slice(0,4)}
     await put('income',rec);await load();render();autoSync()};
   if(!isNew)$('#idel').onclick=async()=>{if(confirm('Delete this entry?')){queueDel(`i_${r.id}.json`);await rm('income',r.id);await load();render();autoSync()}};
+}
+
+// ---------- home office deduction ----------
+function setHO(patch,costPatch){setTaxSetting(s=>{const all={...(s.homeOffice||{})},cur={...HO_DEF,...(all[year]||{})};
+  all[year]={...cur,...patch,costs:{...(cur.costs||{}),...(costPatch||{})}};s.homeOffice=all})}
+function vHomeOffice(){
+  const C=hoCalc(),{H,r}=C,n=x=>Number(x)||0,cur=String(new Date().getFullYear())===year;
+  $('#main').innerHTML=`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">Home office deduction</h3>${yearPicker()}</div>
+   <p class="muted">If you use part of your home regularly and <b>only</b> for your business, you can deduct some of the cost of your home. This shows both IRS methods for ${year} and which one is bigger. It is an estimate, not tax advice.</p>
+   <label style="display:flex;gap:10px;align-items:flex-start;color:var(--text);font-size:15px"><input type="checkbox" style="width:auto;margin-top:3px" data-h="qualifies" ${H.qualifies?'checked':''}><span>I meet the requirements: this space is used <b>regularly and exclusively</b> for business, and it is my principal place of business (or where I meet clients, or a separate structure).</span></label>
+   ${!H.qualifies?`<p class="muted" style="margin-bottom:0;color:var(--danger)">Until you tick this, nothing is deducted. A desk in a bedroom or living room you also use personally does not qualify.</p>`:''}</div>
+  <div class="card"><h3 style="margin-top:0">Your space</h3>
+   <div class="row"><div><label>Total size of your home (sq ft)</label><input type="number" min="0" data-h="homeSqft" value="${n(H.homeSqft)||''}"></div><div><label>Office size (sq ft)</label><input type="number" min="0" data-h="officeSqft" value="${n(H.officeSqft)||''}"></div></div>
+   <div class="row"><div><label>Months used for business in ${year}</label><input type="number" min="1" max="12" data-h="months" value="${n(H.months)||12}"></div><div><label>Method</label><select data-h="method"><option value="best" ${H.method==='best'?'selected':''}>Whichever is bigger</option><option value="simple" ${H.method==='simple'?'selected':''}>Simplified</option><option value="actual" ${H.method==='actual'?'selected':''}>Actual expenses</option></select></div></div>
+   <p class="muted" style="margin-bottom:0">${r.pct>0?`Your office is ${(r.pct*100).toFixed(1)}% of your home.`:'Enter both sizes to get started.'}</p></div>
+  <div class="card"><h3 style="margin-top:0">Yearly home costs (for the actual method)</h3><p class="muted">Enter the full-year total for the whole home. The app takes the office share. Leave blank what doesn't apply. Mortgage principal is not a cost.</p>
+   ${HO_COSTS.map(([k,l])=>`<label>${esc(l)}</label><input type="number" min="0" step="1" data-hc="${k}" value="${n((H.costs||{})[k])||''}" placeholder="0">`).join('')}</div>
+  <div class="card"><h3 style="margin-top:0">Result for ${year}</h3><table>
+   <tr><td>Simplified method ($${HO_RATE} per sq ft, up to ${HO_MAX_SQFT} sq ft)</td><td class="r">${money(r.simple)}</td></tr>
+   <tr><td>Actual expenses (${(r.pct*100).toFixed(1)}% of ${money(r.total)})</td><td class="r">${money(r.actual)}</td></tr>
+   <tr><td><b>Used: ${r.method==='simple'?'simplified method':'actual expenses'}</b></td><td class="r"><b>${money(r.raw)}</b></td></tr>
+   ${C.limit!==null?`<tr><td>Limit: business profit before this deduction (${money(C.inc)} income − ${money(C.inc-C.limit)} expenses)</td><td class="r">${money(Math.max(0,C.limit))}</td></tr>`:''}
+   <tr><td><b>Deduction${H.qualifies?'':' (not counted yet)'}</b></td><td class="r"><b>${money(C.deduction)}</b></td></tr></table>
+   ${r.warn.map(w=>`<p class="muted" style="color:var(--danger);margin:6px 0 0">${esc(w)}</p>`).join('')}
+   ${r.limited?`<p class="muted">The deduction cannot be more than your business profit, so it is cut to ${money(r.limit)}. The simplified method cannot carry the rest to another year.</p>`:''}
+   ${C.limit===null?`<p class="muted">Log your income on the Est. Tax tab so the app can check the profit limit.</p>`:''}
+   <p class="muted" style="margin-bottom:0">It appears on the Schedule C worksheet (line 30) and lowers your profit on the Est. Tax tab.${cur?' The yearly amounts are not scaled up, so enter full-year costs.':''}</p></div>
+  <div class="card"><h3 style="margin-top:0">Good to know</h3><ul class="muted" style="padding-left:18px;margin:0">
+   <li>Pick one method per year. You can switch the next year.</li>
+   <li>The simplified method needs no depreciation, and there is no depreciation to recapture when you sell the home. Mortgage interest and property taxes you don't use here can still go on Schedule A.</li>
+   <li>The actual method can be larger, but home owners must also depreciate the office, which is taxed back when the home is sold. Ask your accountant for the depreciation figure.</li>
+   <li>Keep the square footage, a floor plan or photos of the office, and your bills.</li></ul>
+   <div class="actions"><button class="btn sec" id="hoback">Back to Tax Forms</button></div></div>`;
+  bindYear();
+  document.querySelectorAll('[data-h]').forEach(el=>el.onchange=()=>{const k=el.dataset.h,v=el.type==='checkbox'?el.checked:el.type==='number'?(parseFloat(el.value)||0):el.value;setHO({[k]:v});vHomeOffice()});
+  document.querySelectorAll('[data-hc]').forEach(el=>el.onchange=()=>{setHO({},{[el.dataset.hc]:parseFloat(el.value)||0});vHomeOffice()});
+  $('#hoback').onclick=()=>{view='taxforms';render();window.scrollTo(0,0)};
 }
 
 // ---------- audit-readiness check ----------
@@ -1630,14 +1685,21 @@ function vBank(){
 
 // ---------- tax forms (year-end worksheets) ----------
 function setTaxSetting(fn){const s=settings();fn(s);saveSettings(s);autoSync()}
-function taxData(){const T=totals(),s=settings();return scheduleC(T.r,T.miles,T.miles>0?T.ded/T.miles:0,s.taxMap)}   // the average rate times the miles equals the by-date deduction
+function taxBase(){const T=totals(),s=settings();return scheduleC(T.r,T.miles,T.miles>0?T.ded/T.miles:0,s.taxMap)}   // the average rate times the miles equals the by-date deduction
+const HO_DEF={qualifies:false,homeSqft:0,officeSqft:0,months:12,method:'best',costs:{}};
+const hoSet=()=>({...HO_DEF,...((settings().homeOffice||{})[year]||{})});
+// Home office deduction for the selected year. Limited by business profit only when income has been logged.
+function hoCalc(sc){sc=sc||taxBase();const H=hoSet(),inc=incomeRecs.filter(x=>x.kind==='income'&&String(x.date).startsWith(year)).reduce((s,x)=>s+(Number(x.amount)||0),0);
+  const limit=inc>0?inc-sc.total:null,r=homeOffice({...H,limit});return {H,r,inc,limit,deduction:H.qualifies?r.deduction:0}}
+function taxData(){const sc=taxBase();return {...sc,home:hoCalc(sc)}}
 function worksheetBody(){
   const S=settings(),sc=taxData(),T=totals(),biz=S.bizName||'';
   return `<h1>Schedule C Expense Worksheet — ${esc(year)}</h1>${biz?`<p><b>${esc(biz)}</b></p>`:''}
   <p>Prepared from the Expense &amp; Mileage Tracker for your tax preparer. It organizes expenses by Schedule C line. It is not a tax form and not tax advice. Income (line 1) is not tracked here.</p>
   <table><tr><th>Line</th><th>Expense</th><th class="r">Amount</th></tr>
   ${sc.rows.map(x=>`<tr><td>${x.line}</td><td>${esc(x.label)}<br><small>${x.cats.map(([k,v])=>`${esc(k)} ${money(v)}`).join(' · ')}${x.line==='24b'?` · total spent ${money(x.gross)}, 50% deducted`:''}${x.mileage?`${x.cats.length?' · ':''}standard mileage ${T.t.length?`${sc.miles.toFixed(1)} mi at ${esc(T.rateNote)} = `:''}${money(x.mileage)}`:''}</small></td><td class="r">${money(x.amount)}</td></tr>`).join('')||'<tr><td colspan="3">No expenses recorded for this year.</td></tr>'}
-  <tr><td><b>28</b></td><td><b>Total expenses</b></td><td class="r"><b>${money(sc.total)}</b></td></tr></table>
+  <tr><td><b>28</b></td><td><b>Total expenses</b></td><td class="r"><b>${money(sc.total)}</b></td></tr>
+  ${sc.home.deduction>0?`<tr><td>30</td><td>Business use of your home (${sc.home.r.method==='simple'?'simplified method':'actual expenses'})<br><small>${sc.home.r.method==='simple'?`${Math.min(sc.home.H.officeSqft,HO_MAX_SQFT)} sq ft × $${HO_RATE}${sc.home.r.months<12?` × ${sc.home.r.months}/12`:''}`:`${(sc.home.r.pct*100).toFixed(1)}% of home costs`}${sc.home.r.limited?' · limited by business profit':''}</small></td><td class="r">${money(sc.home.deduction)}</td></tr>`:''}</table>
   <h2>Vehicle (Schedule C, Part IV)</h2>
   <p>Business miles: <b>${sc.miles.toFixed(1)}</b> across ${T.t.length} trip${T.t.length===1?'':'s'} · Standard mileage rate used: ${esc(T.rateNote)} · Deduction: <b>${money(sc.mileDed)}</b></p>
   <p><small>Using the standard mileage rate generally covers gas, repairs and similar car costs. Check with your preparer before also deducting those. Parking and tolls can be added on top.</small></p>`}
@@ -1652,8 +1714,9 @@ function vTaxForms(){
    <div class="stats"><div class="stat"><b>${money(sc.total)}</b><span>Total expenses (Schedule C line 28)</span></div><div class="stat"><b>${money(sc.mileDed)}</b><span>Mileage deduction (${sc.miles.toFixed(1)} mi)</span></div></div>
    <div class="actions"><button class="btn" id="tprint">🖨 Print / Save as PDF</button><button class="btn sec" id="tcsv">Download CSV</button></div></div>
   <div class="card"><h3 style="margin-top:0">Schedule C expenses ${year}</h3>
-   ${sc.rows.length?`<table>${sc.rows.map(x=>`<tr><td style="width:44px"><b>${x.line}</b></td><td>${esc(x.label)}<div class="muted">${x.cats.map(([k,v])=>`${esc(k)} ${money(v)}`).join(' · ')}${x.line==='24b'?` (50% of ${money(x.gross)})`:''}${x.mileage?`${x.cats.length?' · ':''}mileage ${money(x.mileage)}`:''}</div></td><td class="r">${money(x.amount)}</td></tr>`).join('')}<tr><td><b>28</b></td><td><b>Total expenses</b></td><td class="r"><b>${money(sc.total)}</b></td></tr></table>`:'<p class="muted">No receipts or trips for this year yet.</p>'}
-   <p class="muted" style="margin-bottom:0">Meals are counted at 50%. Income is not tracked in this app, so profit is not calculated.</p></div>
+   ${sc.rows.length?`<table>${sc.rows.map(x=>`<tr><td style="width:44px"><b>${x.line}</b></td><td>${esc(x.label)}<div class="muted">${x.cats.map(([k,v])=>`${esc(k)} ${money(v)}`).join(' · ')}${x.line==='24b'?` (50% of ${money(x.gross)})`:''}${x.mileage?`${x.cats.length?' · ':''}mileage ${money(x.mileage)}`:''}</div></td><td class="r">${money(x.amount)}</td></tr>`).join('')}<tr><td><b>28</b></td><td><b>Total expenses</b></td><td class="r"><b>${money(sc.total)}</b></td></tr>${sc.home.deduction>0?`<tr><td><b>30</b></td><td>Business use of your home</td><td class="r">${money(sc.home.deduction)}</td></tr>`:''}</table>`:'<p class="muted">No receipts or trips for this year yet.</p>'}
+   <p class="muted" style="margin-bottom:0">Meals are counted at 50%. Profit is on the Est. Tax tab, where you log your income.</p></div>
+  <div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><div><h3 style="margin:0">Home office deduction</h3><div class="muted">${sc.home.deduction>0?`${money(sc.home.deduction)} for ${year}`:'Working from home? See what you can deduct.'}</div></div><button class="btn sec" id="hogo">${sc.home.H.qualifies?'Edit':'Calculate'}</button></div></div>
   <div class="card"><h3 style="margin-top:0">Which Schedule C line for each category?</h3>
    <p class="muted">Pre-filled from the category names. Change any that are wrong. This is saved and used for every year.</p>
    ${cats.map(c=>`<label>${esc(c)}</label><select data-c="${esc(c)}">${SCHED_C.map(([k,l])=>`<option value="${k}" ${lineFor(c,map)===k?'selected':''}>${k} · ${esc(l)}</option>`).join('')}</select>`).join('')}</div>
@@ -1663,8 +1726,8 @@ function vTaxForms(){
   <div class="card"><h3 style="margin-top:0">Blank IRS forms</h3><p class="muted">Official PDFs from irs.gov. Save the ones you fill in under <b>Tax Docs</b>.</p>
    ${IRS_FORMS.map(([l,f])=>`<div style="padding:6px 0"><a href="https://www.irs.gov/pub/irs-pdf/${f}.pdf" target="_blank" rel="noopener">${esc(l)} ↗</a></div>`).join('')}
    <p class="muted" style="margin-bottom:0">The IRS 1099-NEC “Copy A” sent to the IRS is a special red-ink form that can’t be printed from this PDF.</p></div>`;
-  bindYear();$('#tprint').onclick=printWorksheet;
-  $('#tcsv').onclick=()=>download(`schedule-c-worksheet-${year}.csv`,'Line,Expense,Amount\n'+sc.rows.map(x=>[x.line,q(x.label),x.amount.toFixed(2)].join(',')).join('\n')+`\n28,Total expenses,${sc.total.toFixed(2)}`);
+  bindYear();$('#tprint').onclick=printWorksheet;$('#hogo').onclick=()=>{view='homeoffice';render();window.scrollTo(0,0)};
+  $('#tcsv').onclick=()=>download(`schedule-c-worksheet-${year}.csv`,'Line,Expense,Amount\n'+sc.rows.map(x=>[x.line,q(x.label),x.amount.toFixed(2)].join(',')).join('\n')+`\n28,Total expenses,${sc.total.toFixed(2)}`+(sc.home.deduction>0?`\n30,Business use of your home,${sc.home.deduction.toFixed(2)}`:''));
   document.querySelectorAll('select[data-c]').forEach(s=>s.onchange=()=>{setTaxSetting(st=>{st.taxMap={...(st.taxMap||{}),[s.dataset.c]:s.value}});render()});
   document.querySelectorAll('input[data-k]').forEach(c=>c.onchange=()=>{setTaxSetting(st=>{const m={...(st.taxChk||{})};m[year]={...(m[year]||{}),[c.dataset.k]:c.checked};st.taxChk=m});render()});
 }
