@@ -196,7 +196,7 @@ let inForm=false;
 function render(){
   inForm=false;updateStatus();
   document.querySelectorAll('#nav button').forEach(b=>b.classList.toggle('on',b.dataset.v===view));
-  ({summary:vSummary,receipts:vReceipts,mileage:vMileage,audit:vAudit,homeoffice:vHomeOffice,esttax:vEstTax,bank:vBank,taxforms:vTaxForms,taxdocs:vTaxDocs,settings:vSettings})[view]();
+  ({summary:vSummary,receipts:vReceipts,mileage:vMileage,qbexport:vQbExport,audit:vAudit,homeoffice:vHomeOffice,esttax:vEstTax,bank:vBank,taxforms:vTaxForms,taxdocs:vTaxDocs,settings:vSettings})[view]();
 }
 document.getElementById('nav').onclick=e=>{if(e.target.dataset.v){view=e.target.dataset.v;render();window.scrollTo(0,0)}};
 
@@ -230,11 +230,11 @@ function vSummary(){
   ${auditCard()}
   ${clientCard(T)}
   <div class="card"><h3 style="margin-top:0">Export ${year}</h3>
-   <div class="actions"><button class="btn" id="pkg">📦 Accountant package (ZIP)</button><button class="btn sec" id="stmx">🧾 Client statement</button></div>
+   <div class="actions"><button class="btn" id="pkg">📦 Accountant package (ZIP)</button><button class="btn sec" id="stmx">🧾 Client statement</button><button class="btn sec" id="qbx">📗 QuickBooks export</button></div>
    <p class="muted">One file for your accountant: summary, receipts and mileage spreadsheets, a printable report, and every receipt photo sorted by category.</p>
    <div class="actions"><button class="btn sec" id="csvR">Receipts CSV</button><button class="btn sec" id="csvT">Mileage CSV</button><button class="btn sec" id="pdf">PDF report with photos</button></div>
    <p class="muted">The report includes your receipt photos. Open it and use Print → Save as PDF.</p></div>`;
-  wireHome();bindYear();const ag=$('#auditgo');if(ag)ag.onclick=()=>{view='audit';render();window.scrollTo(0,0)};$('#pkg').onclick=e=>packageExport(e.currentTarget);$('#stmx').onclick=()=>statementView();
+  wireHome();bindYear();const ag=$('#auditgo');if(ag)ag.onclick=()=>{view='audit';render();window.scrollTo(0,0)};$('#pkg').onclick=e=>packageExport(e.currentTarget);$('#stmx').onclick=()=>statementView();$('#qbx').onclick=()=>{view='qbexport';render();window.scrollTo(0,0)};
   document.querySelectorAll('.stmbtn').forEach(b=>b.onclick=()=>statementView(b.dataset.c));$('#csvR').onclick=()=>csv('receipts');$('#csvT').onclick=()=>csv('trips');$('#pdf').onclick=report;
 }
 
@@ -675,6 +675,31 @@ function rateLabel(rate,trips){
   const rs=[...new Set((trips||[]).map(t=>rate(t.date)))].sort((a,b)=>a-b);
   return rs.length?`${rs.map(centsLabel).join(' and ')} per mile, by trip date`:'IRS rate by trip date';}
 // ---- end mileage rate logic ----
+
+// ---- QuickBooks export logic (pure) ----
+// QuickBooks Online's manual bank upload takes three columns: Date, Description, Amount (money out is negative).
+// Limits from Intuit's help: 350 KB and 1,000 lines per file, so large years are split.
+const QB_MAX_ROWS=900;
+const qbDate=iso=>{const s=String(iso||'');return /^\d{4}-\d{2}-\d{2}/.test(s)?`${s.slice(5,7)}/${s.slice(8,10)}/${s.slice(0,4)}`:''};
+function qbText(s,noDigits){let t=String(s||'').replace(/[^A-Za-z0-9 ]+/g,' ');if(noDigits)t=t.replace(/[0-9]+/g,' ');return t.replace(/\s+/g,' ').trim()}
+const qbCell=v=>{const s=String(v??'');return /[",\r\n]/.test(s)?`"${s.replace(/"/g,'""')}"`:s};
+// Rows for the upload file: receipts as negative amounts, optional income as positive.
+function qbRows(recs,incomeList,opt){opt=opt||{};const rows=[];
+  for(const r of recs||[]){const a=Math.round((Number(r.amount)||0)*100)/100,d=qbDate(r.date);if(!(a>0)||!d)continue;
+    const desc=qbText([r.vendor,opt.withCategory?r.category:''].filter(Boolean).join(' '),opt.noDigits)||'Expense';
+    rows.push({iso:r.date,date:d,desc:desc.slice(0,100),amount:-a})}
+  if(opt.withIncome)for(const x of incomeList||[]){if(x.kind&&x.kind!=='income')continue;const a=Math.round((Number(x.amount)||0)*100)/100,d=qbDate(x.date);if(!(a>0)||!d)continue;
+    rows.push({iso:x.date,date:d,desc:(qbText(['Payment',x.client].filter(Boolean).join(' '),opt.noDigits)||'Payment received').slice(0,100),amount:a})}
+  return rows.sort((a,b)=>a.iso.localeCompare(b.iso)||a.desc.localeCompare(b.desc))}
+const qbCsv=rows=>['Date,Description,Amount',...rows.map(r=>`${r.date},${qbCell(r.desc)},${r.amount.toFixed(2)}`)].join('\r\n')+'\r\n';
+function qbChunks(rows,max){max=max||QB_MAX_ROWS;const out=[];for(let i=0;i<rows.length;i+=max)out.push(rows.slice(i,i+max));return out}
+// Detailed file for an accountant or other imports: keeps vendor, category, customer, notes. Amounts are positive.
+function qbDetailCsv(recs,incomeList,opt){opt=opt||{};
+  const head=['Date','Payee','Category','Memo','Amount','Customer','Billable','Receipt photo','Type'],lines=[head.join(',')];
+  const all=[...(recs||[]).filter(r=>(Number(r.amount)||0)>0&&qbDate(r.date)).map(r=>({iso:r.date,cells:[qbDate(r.date),r.vendor||'',r.category||'',r.notes||'',(Math.round(Number(r.amount)*100)/100).toFixed(2),r.client||'',r.billable?'Yes':'',(r.photos||[]).length?'Yes':'No','Expense']}))];
+  if(opt.withIncome)for(const x of incomeList||[]){if(x.kind&&x.kind!=='income')continue;if((Number(x.amount)||0)>0&&qbDate(x.date))all.push({iso:x.date,cells:[qbDate(x.date),x.client||'',x.client?'':'Income',x.note||'',(Math.round(Number(x.amount)*100)/100).toFixed(2),x.client||'','','','Income']})}
+  all.sort((a,b)=>a.iso.localeCompare(b.iso));for(const a of all)lines.push(a.cells.map(qbCell).join(','));return lines.join('\r\n')+'\r\n'}
+// ---- end QuickBooks export logic ----
 
 // ---- home office logic (pure) ----
 // Business use of your home. Simplified method: $5 per square foot, up to 300 square feet (IRS Pub. 587). Actual method: the office share of home costs.
@@ -1557,6 +1582,40 @@ function incomeForm(r,kind){inForm=true;const isNew=!r,pay=kind==='payment';
     if(pay){rec.year=$('#iy').value;rec.quarter=+$('#iq').value;rec.type=$('#it').value;year=rec.year}else{rec.client=$('#ic').value.trim();year=d.slice(0,4)}
     await put('income',rec);await load();render();autoSync()};
   if(!isNew)$('#idel').onclick=async()=>{if(confirm('Delete this entry?')){queueDel(`i_${r.id}.json`);await rm('income',r.id);await load();render();autoSync()}};
+}
+
+// ---------- QuickBooks export ----------
+let qbo={cat:true,nodig:true,inc:false};
+function qbData(){const T=totals(),inc=incomeRecs.filter(x=>x.kind==='income'&&String(x.date).startsWith(year)),o={withCategory:qbo.cat,noDigits:qbo.nodig,withIncome:qbo.inc};
+  return {T,inc,o,rows:qbRows(T.r,inc,o)}}
+function vQbExport(){
+  const D=qbData(),parts=qbChunks(D.rows),exp=D.rows.filter(r=>r.amount<0).length;
+  $('#main').innerHTML=`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">QuickBooks export</h3>${yearPicker()}</div>
+   <p class="muted">Makes a file you can upload into QuickBooks Online, with your ${year} receipts as money-out lines (${exp} expense${exp===1?'':'s'}${qbo.inc?`, ${D.rows.length-exp} income`:''}). QuickBooks' basic upload only takes a date, a description and an amount, so your own categories can't come along. Use the options below to help you sort them once they are in.</p>
+   <label style="display:flex;gap:10px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" style="width:auto" data-q="cat" ${qbo.cat?'checked':''}>Add the category to each description (for example “Staples Supplies”)</label>
+   <label style="display:flex;gap:10px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" style="width:auto" data-q="nodig" ${qbo.nodig?'checked':''}>Remove numbers and symbols from descriptions (QuickBooks can reject them)</label>
+   <label style="display:flex;gap:10px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" style="width:auto" data-q="inc" ${qbo.inc?'checked':''}>Also include income I logged as deposits</label>
+   <div class="actions"><button class="btn" id="qbgo" ${D.rows.length?'':'disabled'}>⬇ QuickBooks upload file${parts.length>1?` (${parts.length} files in a ZIP)`:''}</button><button class="btn sec" id="qbdet" ${D.T.r.length?'':'disabled'}>⬇ Detailed CSV</button></div>
+   <p class="muted" id="qbmsg" aria-live="polite">${D.rows.length?'':`No receipts for ${year} yet.`}</p></div>
+  <div class="card"><h3 style="margin-top:0">How to upload</h3><ol class="muted" style="padding-left:18px;margin:0">
+   <li>In QuickBooks Online, open <b>Banking</b> (called <b>Transactions → Bank transactions</b> in some versions) and choose <b>Upload transactions</b>. Pick the file you just downloaded.</li>
+   <li>Choose the account to put them in. Use a cash or “receipts” account, not your real bank account.</li>
+   <li>Map the columns: Date, Description, Amount (one column, money out is negative). Set the date format to <b>MM/DD/YYYY</b>.</li>
+   <li>Review the lines, select them, and accept. Then give each one its category.</li></ol></div>
+  <div class="card"><h3 style="margin-top:0">Before you upload</h3><ul class="muted" style="padding-left:18px;margin:0">
+   <li><b>Avoid duplicates.</b> If these purchases already came through your bank or card connection in QuickBooks, don't upload them again.</li>
+   <li><b>Mileage</b> isn't a bank transaction, so it isn't in this file. Your accountant records it as one entry. The mileage log and totals are in the accountant package.</li>
+   <li>The detailed CSV keeps the vendor, category, client, notes and whether there is a photo, for your accountant or for spreadsheets.</li>
+   <li>Files over 900 lines are split, because QuickBooks limits each upload to 1,000 lines and 350 KB. QuickBooks screens and menu names change, so follow its on-screen prompts if they differ.</li></ul>
+   <div class="actions"><button class="btn sec" id="qbback">Back to Summary</button></div></div>`;
+  bindYear();
+  document.querySelectorAll('[data-q]').forEach(c=>c.onchange=()=>{qbo[c.dataset.q]=c.checked;vQbExport()});
+  $('#qbback').onclick=()=>{view='summary';render();window.scrollTo(0,0)};
+  $('#qbgo').onclick=()=>{
+    if(parts.length<=1)download(`quickbooks-upload-${year}.csv`,qbCsv(D.rows));
+    else{const enc=new TextEncoder();download(`quickbooks-upload-${year}.zip`,makeZip(parts.map((p,i)=>({name:`quickbooks-upload-${year}-part${i+1}.csv`,data:enc.encode(qbCsv(p))}))),'application/zip')}
+    $('#qbmsg').textContent=`Downloaded ${D.rows.length} line${D.rows.length===1?'':'s'}.`};
+  $('#qbdet').onclick=()=>{download(`quickbooks-detailed-${year}.csv`,qbDetailCsv(D.T.r,D.inc,D.o));$('#qbmsg').textContent='Downloaded the detailed CSV.'};
 }
 
 // ---------- home office deduction ----------
