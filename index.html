@@ -1275,7 +1275,7 @@ function vSettings(){
    <p class="muted">Reading happens on your device and photos are not sent anywhere. The first time, the app downloads some reading data (a few MB), so it needs internet once.</p>
    <div class="actions"><button class="btn" id="ss">Save settings</button></div></div>
   <div class="card"><h3 style="margin-top:0">Backup &amp; restore</h3>
-   <p class="muted">Data is stored only in this browser. Back up regularly — clearing browser data deletes it. To move data to another device, export here and import there.</p>
+   <p class="muted">The backup includes receipts, trips, tax documents, income and payments, and settings. Data is stored in this browser (and in Google Drive when sync is on). Back up regularly — clearing browser data deletes it. To move data to another device, export here and import there.</p>
    <div class="actions"><button class="btn" id="bk">Download backup (.json)</button><button class="btn sec" id="rs">Restore from backup…</button></div>
    <input type="file" id="rf" accept=".json,application/json" class="hidden"></div>`;
   updateStatus();$('#chprof').onclick=()=>onboardView(true);
@@ -1283,12 +1283,14 @@ function vSettings(){
   $('#gd').onclick=()=>{try{if(tok)google.accounts.oauth2.revoke(tok)}catch(e){}tok=null;tokExp=0;syncErr='';setG({on:0});vSettings()};
   $('#ss').onclick=()=>{const r=parseFloat($('#rate').value),c=$('#cats').value.split('\n').map(x=>x.trim()).filter(Boolean);
     if(isNaN(r)||!c.length){alert('Enter a valid rate and at least one category.');return}saveSettings({...settings(),rate:r,rateMode:$('#rmode').checked?'irs':'custom',categories:c,autoscan:$('#autoscan').checked,purposes:$('#plist').value.split('\n').map(x=>x.trim()).filter(Boolean),clients:$('#clist').value.split('\n').map(x=>x.trim()).filter(Boolean),bizName:$('#bizn').value.trim(),bizContact:$('#bizc').value.trim(),clientRules:$('#crules').value.trim()});alert('Saved.')};
-  $('#bk').onclick=()=>download(`expense-backup-${today()}.json`,JSON.stringify({v:1,settings:settings(),receipts,trips}),'application/json');
+  $('#bk').onclick=()=>download(`expense-backup-${today()}.json`,JSON.stringify({v:2,settings:settings(),receipts,trips,taxdocs,income:incomeRecs}),'application/json');
   $('#rs').onclick=()=>$('#rf').click();
   $('#rf').onchange=async e=>{const f=e.target.files[0];if(!f)return;
     try{const d=JSON.parse(await f.text());if(!Array.isArray(d.receipts)||!Array.isArray(d.trips))throw 0;
-      if(!confirm(`Import ${d.receipts.length} receipts and ${d.trips.length} trips? Matching entries are overwritten; others are kept.`))return;
+      const docs=Array.isArray(d.taxdocs)?d.taxdocs:[],inc=Array.isArray(d.income)?d.income:[];   // older backups have neither
+      if(!confirm(`Import ${d.receipts.length} receipts, ${d.trips.length} trips, ${docs.length} tax documents and ${inc.length} income and payment entries? Matching entries are overwritten; others are kept.`))return;
       for(const r of d.receipts)await put('receipts',{...r,_s:undefined,updated:Date.now()});for(const t of d.trips)await put('trips',{...t,_s:undefined,updated:Date.now()});
+      for(const x of docs)await put('taxdocs',{...x,_s:undefined,updated:Date.now()});for(const x of inc)await put('income',{...x,_s:undefined,updated:Date.now()});
       if(d.settings)saveSettings(d.settings);await load();render();autoSync();alert('Restored.');
     }catch(x){alert('That file is not a valid backup.')}};
 }
