@@ -1922,7 +1922,9 @@ function docForm(d){inForm=true;const isNew=!d;
 }
 
 // ---------- boot ----------
-openDB().then(load).then(render).then(autoSync).catch(e=>{$('#main').innerHTML='<div class="card">Storage unavailable: '+esc(e.message||e)+'</div>'});
+// Sync on open: the Google sign-in script loads async, so wait for it (up to 10 s) before the first sync.
+const whenGoogle=(ms=10000)=>new Promise(res=>{const t0=Date.now();(function w(){if(window.google?.accounts?.oauth2)return res(true);if(Date.now()-t0>ms)return res(false);setTimeout(w,150)})()});
+openDB().then(load).then(render).then(()=>{whenGoogle().then(()=>autoSync())}).catch(e=>{$('#main').innerHTML='<div class="card">Storage unavailable: '+esc(e.message||e)+'</div>'});
 navigator.storage?.persist?.();
 </script>
 </body>
