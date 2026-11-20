@@ -1013,6 +1013,20 @@ function qbDetailCsv(recs,incomeList,opt){opt=opt||{};
   const all=[...(recs||[]).filter(r=>(Number(r.amount)||0)>0&&qbDate(r.date)).map(r=>({iso:r.date,cells:[qbDate(r.date),r.vendor||'',r.category||'',r.notes||'',(Math.round(Number(r.amount)*100)/100).toFixed(2),r.client||'',r.billable?'Yes':'',(r.photos||[]).length?'Yes':'No','Expense']}))];
   if(opt.withIncome)for(const x of incomeList||[]){if(x.kind&&x.kind!=='income')continue;if((Number(x.amount)||0)>0&&qbDate(x.date))all.push({iso:x.date,cells:[qbDate(x.date),x.client||'',x.client?'':'Income',x.note||'',(Math.round(Number(x.amount)*100)/100).toFixed(2),x.client||'','','','Income']})}
   all.sort((a,b)=>a.iso.localeCompare(b.iso));for(const a of all)lines.push(a.cells.map(qbCell).join(','));return lines.join('\r\n')+'\r\n'}
+// Excel copies of the QuickBooks files: a CSV can't carry column widths, so Excel shows long dates as ######## until the column is widened.
+// An .xlsx has real dates and sized columns. (QuickBooks and Xero are still uploaded from the CSV files.)
+async function sheetDownload(name,sheetName,head,rows,widths,moneyCols){
+  const X=await loadXlsx(),ws=X.utils.aoa_to_sheet([head,...rows],{cellDates:true});
+  rows.forEach((r,i)=>r.forEach((v,j)=>{const c=ws[X.utils.encode_cell({r:i+1,c:j})];if(!c)return;if(v instanceof Date)c.z='mm/dd/yyyy';else if(moneyCols.includes(j))c.z='#,##0.00;-#,##0.00'}));
+  ws['!cols']=widths.map(w=>({wch:w}));ws['!autofilter']={ref:`A1:${String.fromCharCode(64+head.length)}${rows.length+1}`};
+  const wb=X.utils.book_new();X.utils.book_append_sheet(wb,ws,sheetName);
+  await download(name,new Blob([X.write(wb,{bookType:'xlsx',type:'array',cellDates:true})],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
+}
+const isoDate=iso=>new Date(String(iso).slice(0,10)+'T12:00:00');
+function qbDetailRows(recs,incomeList,opt){opt=opt||{};
+  const all=[...(recs||[]).filter(r=>(Number(r.amount)||0)>0&&qbDate(r.date)).map(r=>({iso:r.date,cells:[isoDate(r.date),r.vendor||'',r.category||'',r.notes||'',Math.round(Number(r.amount)*100)/100,r.client||'',r.billable?'Yes':'',(r.photos||[]).length?'Yes':'No','Expense']}))];
+  if(opt.withIncome)for(const x of incomeList||[]){if(x.kind&&x.kind!=='income')continue;if((Number(x.amount)||0)>0&&qbDate(x.date))all.push({iso:x.date,cells:[isoDate(x.date),x.client||'',x.client?'':'Income',x.note||'',Math.round(Number(x.amount)*100)/100,x.client||'','','','Income']})}
+  return all.sort((a,b)=>a.iso.localeCompare(b.iso)).map(a=>a.cells)}
 // Xero's CSV bank statement import: Date and Amount are required; Payee, Description and Reference add detail.
 // Income and expenses share one Amount column (expenses negative). Dates are written YYYY-MM-DD so Xero never has to guess the order.
 function xeroRows(recs,incomeList,opt){opt=opt||{};const rows=[],iso=d=>/^\d{4}-\d{2}-\d{2}/.test(String(d||''))?String(d).slice(0,10):'';
@@ -1924,6 +1938,8 @@ function vQbExport(){
    <label style="display:flex;gap:10px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" style="width:auto" data-q="nodig" ${qbo.nodig?'checked':''}>Remove numbers and symbols from descriptions (QuickBooks can reject them)</label>
    <label style="display:flex;gap:10px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" style="width:auto" data-q="inc" ${qbo.inc?'checked':''}>Also include income I logged as deposits</label>
    <div class="actions"><button class="btn" id="qbgo" ${D.rows.length?'':'disabled'}>${I.dl}QuickBooks upload file${parts.length>1?` (${parts.length} files in a ZIP)`:''}</button><button class="btn" id="xrgo" ${D.rows.length?'':'disabled'}>${I.dl}Xero statement file</button><button class="btn sec" id="qbdet" ${D.T.r.length?'':'disabled'}>${I.dl}Detailed CSV</button></div>
+   <div class="actions" style="margin-top:0"><button class="btn sec" id="qbxl" ${D.rows.length?'':'disabled'}>${I.export}QuickBooks lines (Excel)</button><button class="btn sec" id="qbdetxl" ${D.T.r.length?'':'disabled'}>${I.export}Detailed (Excel)</button></div>
+   <p class="muted">The Excel files are for reading and editing: dates show in full and the columns are sized. Upload the CSV files to QuickBooks and Xero.</p>
    <p class="muted" id="qbmsg" aria-live="polite">${D.rows.length?'':`No receipts for ${year} yet.`}</p></div>
   <div class="card"><h3 style="margin-top:0">How to upload to QuickBooks</h3><ol class="muted" style="padding-left:18px;margin:0">
    <li>In QuickBooks Online, open <b>Banking</b> (called <b>Transactions → Bank transactions</b> in some versions) and choose <b>Upload transactions</b>. Pick the file you just downloaded.</li>
@@ -1949,6 +1965,9 @@ function vQbExport(){
     $('#qbmsg').textContent=`Downloaded ${D.rows.length} line${D.rows.length===1?'':'s'}.`};
   $('#xrgo').onclick=()=>{download(`xero-statement-${year}.csv`,xeroCsv(xeroRows(D.T.r,D.inc,D.o)));$('#qbmsg').textContent=`Downloaded ${D.rows.length} line${D.rows.length===1?'':'s'} for Xero.`};
   $('#qbdet').onclick=()=>{download(`quickbooks-detailed-${year}.csv`,qbDetailCsv(D.T.r,D.inc,D.o));$('#qbmsg').textContent='Downloaded the detailed CSV.'};
+  const xlGo=async(fn)=>{const m=$('#qbmsg');m.textContent='Building the Excel file…';try{await fn();m.textContent='Downloaded the Excel file.'}catch(e){m.textContent=e.message||'Could not build the Excel file.'}};
+  $('#qbxl').onclick=()=>xlGo(()=>sheetDownload(`quickbooks-lines-${year}.xlsx`,'QuickBooks lines',['Date','Description','Amount'],D.rows.map(r=>[isoDate(r.iso),r.desc,r.amount]),[12,40,12],[2]));
+  $('#qbdetxl').onclick=()=>xlGo(()=>sheetDownload(`quickbooks-detailed-${year}.xlsx`,'Detailed',['Date','Payee','Category','Memo','Amount','Customer','Billable','Receipt photo','Type'],qbDetailRows(D.T.r,D.inc,D.o),[12,26,16,34,12,18,9,13,9],[4]));
 }
 
 // ---------- home office deduction ----------
