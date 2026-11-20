@@ -2136,6 +2136,31 @@ function bankCompute(){
   const b=buildTxns(bank.det.data,bank.cols,bank.mode),ign=new Set(settings().bankIgn||[]);
   const hidden=b.txns.filter(t=>ign.has(t.fp)),all=b.txns.filter(t=>!ign.has(t.fp));
   return {b,hidden,all,mt:matchTxns(all,receipts)};}
+// Spreadsheet of the statement that is open: every charge with whether it has a receipt, the matching receipt, and the receipts the file doesn't show.
+async function exportBankXlsx(){
+  const msg=$('#bxmsg');
+  if(!bank.det||!(bank.cols.date>=0&&bank.cols.desc>=0&&(bank.cols.amount>=0||bank.cols.debit>=0))){msg.textContent='Choose a statement file first.';return}
+  try{
+    msg.textContent='Building the spreadsheet…';
+    const X=await loadXlsx(),{all,hidden,mt}=bankCompute(),r2=v=>Math.round(v*100)/100,D=s=>new Date(String(s).slice(0,10)+'T12:00:00'),money0='$#,##0.00';
+    const rows=[...all.map((t,i)=>{const c=mt.byTxn.get(i),r=c?receipts[c.ri]:null;
+        return {iso:t.date,cells:[D(t.date),t.desc,cleanDesc(t.desc),r2(t.amount),c?'Receipt found':'No receipt yet',r?r.vendor||'':'',r?D(r.date):'',r?r2(Number(r.amount)||0):'',r?r.category||'':'']}}),
+      ...hidden.map(t=>({iso:t.date,cells:[D(t.date),t.desc,cleanDesc(t.desc),r2(t.amount),'Marked personal','','','','']}))].sort((a,b)=>a.iso.localeCompare(b.iso)).map(x=>x.cells);
+    const n=rows.length,ws=X.utils.aoa_to_sheet([['Date','Bank description','Cleaned description','Amount','Status','Receipt vendor','Receipt date','Receipt amount','Receipt category'],...rows],{cellDates:true});
+    rows.forEach((r,i)=>{ws['A'+(i+2)].z='yyyy-mm-dd';ws['D'+(i+2)].z=money0;if(r[6])ws['G'+(i+2)].z='yyyy-mm-dd';if(r[7]!=='')ws['H'+(i+2)].z=money0});
+    ws['!ref']=`A1:I${n+1}`;ws['!autofilter']={ref:`A1:I${n+1}`};ws['!cols']=[{wch:12},{wch:40},{wch:28},{wch:12},{wch:16},{wch:24},{wch:12},{wch:14},{wch:16}];
+    const stat=['Receipt found','No receipt yet','Marked personal'],ws2=X.utils.aoa_to_sheet([['Status','Charges','Amount'],...stat.map(s=>[s]),['Total']]);
+    stat.forEach((s,i)=>{const r=i+2,m=rows.filter(x=>x[4]===s);
+      ws2['B'+r]={t:'n',v:m.length,f:`COUNTIF(Charges!$E$2:$E$${n+1},$A${r})`};ws2['C'+r]={t:'n',v:r2(m.reduce((a,x)=>a+x[3],0)),f:`SUMIF(Charges!$E$2:$E$${n+1},$A${r},Charges!$D$2:$D$${n+1})`,z:money0}});
+    ws2['B5']={t:'n',v:n,f:'SUM(B2:B4)'};ws2['C5']={t:'n',v:r2(rows.reduce((a,x)=>a+x[3],0)),f:'SUM(C2:C4)',z:money0};ws2['!ref']='A1:C5';ws2['!cols']=[{wch:18},{wch:10},{wch:14}];
+    const wb=X.utils.book_new();X.utils.book_append_sheet(wb,ws,'Charges');X.utils.book_append_sheet(wb,ws2,'Summary');
+    const dates=all.map(t=>t.date).sort(),lo=dates[0],hi=dates[dates.length-1],orphan=lo?receipts.filter((r,i)=>r.date>=lo&&r.date<=hi&&!mt.byRec.has(i)):[];
+    if(orphan.length){const w3=X.utils.aoa_to_sheet([['Date','Vendor','Category','Amount'],...orphan.map(r=>[D(r.date),r.vendor||'',r.category||'',r2(Number(r.amount)||0)])],{cellDates:true});
+      orphan.forEach((r,i)=>{w3['A'+(i+2)].z='yyyy-mm-dd';w3['D'+(i+2)].z=money0});w3['!cols']=[{wch:12},{wch:28},{wch:16},{wch:12}];X.utils.book_append_sheet(wb,w3,'Receipts not in file')}
+    await download(`bank-transactions-${today()}.xlsx`,new Blob([X.write(wb,{bookType:'xlsx',type:'array',cellDates:true})],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
+    msg.textContent=`Exported ${n} charge${n===1?'':'s'}: ${rows.filter(x=>x[4]==='Receipt found').length} with a receipt, ${rows.filter(x=>x[4]==='No receipt yet').length} without${orphan.length?`, plus ${orphan.length} receipt${orphan.length===1?'':'s'} not found in the file`:''}.`;
+  }catch(e){msg.textContent=e.message||'Could not build the spreadsheet.'}
+}
 function vBank(){
   const S=settings();let h=`<div class="card"><h3 style="margin-top:0">Bank statement import</h3>
    <p class="muted">Download a statement as a <b>CSV</b> file from your bank or card website, then choose it here. The app finds the charges that have no receipt yet, so you can add them as business expenses or mark them personal. The file is read on this device only. It is not uploaded or kept. Only a short code for charges you mark personal is saved, so they don't come back next time.</p>
@@ -2155,7 +2180,8 @@ function vBank(){
      <div class="stat"><b>${all.length}</b><span>Charges${lo?` (${lo} to ${hi})`:''}</span></div>
      <div class="stat"><b>${mm.length}</b><span>Already have a receipt</span></div>
      <div class="stat"><b>${un.length}</b><span>No receipt yet (${money(un.reduce((s,x)=>s+x.t.amount,0))})</span></div></div>
-     <p class="muted" style="margin-bottom:0">${b.skipped} payments, deposits and refunds were skipped.${hidden.length?` ${hidden.length} charges are hidden as personal. <a href="#" id="brestore">Show them again</a>.`:''}</p></div>`;
+     <p class="muted" style="margin-bottom:0">${b.skipped} payments, deposits and refunds were skipped.${hidden.length?` ${hidden.length} charges are hidden as personal. <a href="#" id="brestore">Show them again</a>.`:''}</p>
+     <div class="actions"><button class="btn sec" id="bxl">${I.export}Export to spreadsheet</button></div><p class="muted" id="bxmsg" aria-live="polite" style="margin-bottom:0"></p></div>`;
     h+=`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px"><h3 style="margin:0">Charges with no receipt</h3>${un.length>1?`<button class="btn sec" id="baddall">Add all ${un.length} as business</button>`:''}</div>
      ${un.length?un.slice(0,bank.more).map((x,k)=>`<div style="padding:10px 0;border-bottom:1px solid var(--line)"><div style="display:flex;justify-content:space-between;gap:8px"><div style="min-width:0"><b>${esc(cleanDesc(x.t.desc))}</b><div class="muted">${x.t.date} · ${esc(x.t.desc.slice(0,60))}</div></div><div class="amt">${money(x.t.amount)}</div></div>
        <div class="actions" style="margin-top:6px"><select data-bcat="${k}" style="width:auto;flex:1;min-width:120px">${cats.map(c=>`<option ${c===(guessCategory(x.t.desc,cats)||(cats.includes('Other')?'Other':cats[0]))?'selected':''}>${esc(c)}</option>`).join('')}</select><button class="btn" data-badd="${k}">Add as expense</button><button class="btn sec" data-bpers="${k}">Personal</button></div></div>`).join(''):'<p class="muted">Every charge in this file already has a receipt.</p>'}
@@ -2173,6 +2199,7 @@ function vBank(){
   if(!bank.det)return;
   document.querySelectorAll('select[data-bc]').forEach(s=>s.onchange=()=>{bank.cols[s.dataset.bc]=+s.value;vBank()});
   const bm=$('#bmode');if(bm)bm.onchange=()=>{bank.mode=bm.value;vBank()};
+  const bxl=$('#bxl');if(bxl)bxl.onclick=exportBankXlsx;
   const un=window._bankUn||[];
   const addRec=async(x,cat)=>{await put('receipts',{id:uid(),date:x.t.date,vendor:cleanDesc(x.t.desc),amount:x.t.amount,category:cat,notes:'Imported from bank statement',client:'',billable:false,photos:[],pids:[],bankId:x.t.fp,updated:Date.now()})};
   document.querySelectorAll('[data-badd]').forEach(b=>b.onclick=async()=>{const k=+b.dataset.badd;await addRec(un[k],document.querySelector(`select[data-bcat="${k}"]`).value);await load();vBank();autoSync()});
