@@ -1854,11 +1854,18 @@ async function syncNow(interactive){
      if(f&&ru>lu){const j=await (await api(`${API}/files/${f.id}?alt=media`)).json();if(j&&typeof j==='object')localStorage.setItem('et-settings',JSON.stringify(j))}
      else if(lu&&(!f||lu>ru))await upload(folder,'settings.json',new Blob([JSON.stringify(cur)],{type:'application/json'}),'application/json',{updated:String(lu)},f?.id);}
     setG({last:Date.now()});await load();
-  }catch(e){syncErr=interactive?e.message:(/Drive error|Enter your|did not load|You signed/.test(e.message)?e.message:'Tap Sync to sign in to Google again.');}
+  }catch(e){if(!interactive&&/popup_failed_to_open/.test(e.message||''))armGesture();
+    syncErr=interactive?e.message:(/Drive error|Enter your|did not load|You signed/.test(e.message)?e.message:'Tap Sync to sign in to Google again.');}
   syncing=false;updateStatus();if(!inForm&&!syncErr)render();
   if(again){again=false;syncNow(false)}
 }
 function autoSync(){const g=GS();if(g.cid&&g.on&&navigator.onLine)syncNow(false)}
+// Google's silent sign-in opens a small popup, and browsers only allow a popup right after a click or keypress. So when the sync on open is
+// blocked, try once more on your first tap, click or keypress (that's when the popup is allowed). Armed once per page load.
+let gestureArmed=false,gestureUsed=false;
+function armGesture(){if(gestureArmed||gestureUsed)return;gestureArmed=true;
+  const evs=['click','keydown','touchend'],go=()=>{gestureArmed=false;gestureUsed=true;evs.forEach(ev=>document.removeEventListener(ev,go,true));if(GS().on&&!syncing&&navigator.onLine)syncNow(false)};
+  evs.forEach(ev=>document.addEventListener(ev,go,true))}
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)autoSync()});
 window.addEventListener('online',autoSync);
 
@@ -1875,6 +1882,36 @@ function estCalc(){
   const pays=incomeRecs.filter(x=>x.kind==='payment'&&String(x.year)===year),fed=pays.filter(x=>x.type!=='state');
   const plan=planQuarters(planTotal,fed.map(x=>({quarter:+x.quarter||1,amount:x.amount})),qDueDates(year),today());
   return {E,inc,proj,est,shNeeded,planTotal,plan,pays,statePaid:pays.filter(x=>x.type==='state').reduce((s,x)=>s+(Number(x.amount)||0),0),cur,expenses:sc.total,home:sc.home.deduction};}
+// ---- all income and estimated tax payments to Excel (every year): Income sheet, Payments sheet, and totals by year ----
+async function exportIncomeXlsx(){
+  const msg=$('#ixmsg');
+  const inc=incomeRecs.filter(x=>x.kind==='income').sort((a,b)=>String(a.date).localeCompare(String(b.date))),pay=incomeRecs.filter(x=>x.kind==='payment').sort((a,b)=>String(a.date).localeCompare(String(b.date)));
+  if(!inc.length&&!pay.length){msg.textContent='No income or payments to export yet.';return}
+  try{
+    msg.textContent='Building the spreadsheet…';
+    const X=await loadXlsx(),r2=v=>Math.round(v*100)/100,A=x=>r2(Number(x.amount)||0),D=s=>new Date(String(s).slice(0,10)+'T12:00:00'),money0='$#,##0.00';
+    const sheet=(head,rows,widths,fmt,totalCol,totalLabelCol)=>{const ws=X.utils.aoa_to_sheet([head,...rows],{cellDates:true}),n=rows.length;
+      rows.forEach((r,i)=>r.forEach((v,j)=>{const c=ws[X.utils.encode_cell({r:i+1,c:j})];if(c&&fmt[j])c.z=fmt[j]}));
+      const L=String.fromCharCode(65+totalCol);ws[String.fromCharCode(65+totalLabelCol)+(n+3)]={t:'s',v:'Total'};
+      ws[L+(n+3)]={t:'n',v:r2(rows.reduce((s,r)=>s+r[totalCol],0)),f:`SUM(${L}2:${L}${n+1})`,z:money0};
+      ws['!ref']=`A1:${String.fromCharCode(64+head.length)}${n+3}`;ws['!cols']=widths.map(w=>({wch:w}));if(n)ws['!autofilter']={ref:`A1:${String.fromCharCode(64+head.length)}${n+1}`};return ws};
+    const wsI=sheet(['Date received','Client','Note','Amount'],inc.map(x=>[D(x.date),x.client||'',x.note||'',A(x)]),[14,26,36,13],{0:'yyyy-mm-dd',3:money0},3,1);
+    const wsP=sheet(['Date paid','Tax year','Quarter','Paid to','Confirmation number','Amount'],pay.map(x=>[D(x.date),Number(x.year)||String(x.year||''),'Q'+(x.quarter||''),x.type==='state'?'State':'IRS (federal)',x.note||'',A(x)]),[14,10,9,16,26,13],{0:'yyyy-mm-dd',5:money0},5,3);
+    // totals by year (formulas follow edits made in the spreadsheet)
+    const ys=[...new Set([...inc.map(x=>String(x.date).slice(0,4)),...pay.map(x=>String(x.year))])].filter(Boolean).sort(),nI=inc.length,nP=pay.length;
+    const ws3=X.utils.aoa_to_sheet([['Year','Income received','Federal estimated payments','State estimated payments'],...ys.map(y=>[y])]);
+    ys.forEach((y,i)=>{const r=i+2,iv=r2(inc.filter(x=>String(x.date).startsWith(y)).reduce((s,x)=>s+A(x),0)),pf=r2(pay.filter(x=>String(x.year)===y&&x.type!=='state').reduce((s,x)=>s+A(x),0)),ps=r2(pay.filter(x=>String(x.year)===y&&x.type==='state').reduce((s,x)=>s+A(x),0));
+      ws3['B'+r]={t:'n',v:iv,z:money0,f:nI?`SUMIFS(Income!$D$2:$D$${nI+1},Income!$A$2:$A$${nI+1},">="&DATE(${y},1,1),Income!$A$2:$A$${nI+1},"<="&DATE(${y},12,31))`:undefined};
+      ws3['C'+r]={t:'n',v:pf,z:money0,f:nP?`SUMIFS(Payments!$F$2:$F$${nP+1},Payments!$B$2:$B$${nP+1},${y},Payments!$D$2:$D$${nP+1},"IRS (federal)")`:undefined};
+      ws3['D'+r]={t:'n',v:ps,z:money0,f:nP?`SUMIFS(Payments!$F$2:$F$${nP+1},Payments!$B$2:$B$${nP+1},${y},Payments!$D$2:$D$${nP+1},"State")`:undefined}});
+    const tr=ys.length+2;ws3['A'+tr]={t:'s',v:'Total'};
+    for(const c of ['B','C','D'])ws3[c+tr]={t:'n',v:r2(ys.reduce((s,_,i)=>s+ws3[c+(i+2)].v,0)),f:`SUM(${c}2:${c}${tr-1})`,z:money0};
+    ws3['!ref']=`A1:D${tr}`;ws3['!cols']=[{wch:10},{wch:16},{wch:26},{wch:26}];
+    const wb=X.utils.book_new();X.utils.book_append_sheet(wb,wsI,'Income');X.utils.book_append_sheet(wb,wsP,'Payments');X.utils.book_append_sheet(wb,ws3,'By year');
+    await download(`income-and-payments-${today()}.xlsx`,new Blob([X.write(wb,{bookType:'xlsx',type:'array',cellDates:true})],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
+    msg.textContent=`Exported ${nI} income entr${nI===1?'y':'ies'} (${money(inc.reduce((s,x)=>s+A(x),0))}) and ${nP} payment${nP===1?'':'s'} (${money(pay.reduce((s,x)=>s+A(x),0))}).`;
+  }catch(e){msg.textContent=e.message||'Could not build the spreadsheet.'}
+}
 function vEstTax(){
   const C=estCalc(),{E,est,plan}=C,rows=incomeRecs.filter(x=>x.kind==='income'&&String(x.date).startsWith(year)),n=x=>Number(x)||0;
   const days=plan.next?Math.round((Date.parse(plan.next.due)-Date.parse(today()))/86400000):0;
@@ -1912,7 +1949,8 @@ function vEstTax(){
    <tr><td><b>Federal to pay in estimates</b></td><td class="r"><b>${money(est.needed)}</b></td></tr>
    ${n(E.state)?`<tr><td>State tax at ${n(E.state)}% of profit (rough)</td><td class="r">${money(est.state)}</td></tr><tr><td>State payments logged</td><td class="r">${money(C.statePaid)}</td></tr>`:''}</table>
    <p class="muted" style="margin-bottom:0">Left out: tax credits, additional Medicare tax, net investment income tax, itemized deductions, and the details of your state's rules. The pass-through deduction assumes a consulting business, which the IRS treats as a "specified service" business with a phase-out at higher incomes.</p></div>
-  <div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">Income received in ${year}</h3><button class="btn" id="iadd">${I.plus}Add income</button></div>
+  <div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap"><h3 style="margin:0">Income received in ${year}</h3><div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="iadd">${I.plus}Add income</button><button class="btn sec" id="ixl">${I.export}Export income and payments</button></div></div>
+   <p class="muted" id="ixmsg" aria-live="polite" style="margin-bottom:0"></p>
    ${rows.length?`<table>${rows.map(x=>`<tr class="irow" data-i="${x.id}" style="cursor:pointer"><td>${x.date}</td><td>${esc(x.client||x.note||'Payment')}${x.client&&x.note?`<div class="muted">${esc(x.note)}</div>`:''}</td><td class="r">${money(x.amount)}</td></tr>`).join('')}<tr><td colspan="2"><b>Total</b></td><td class="r"><b>${money(C.inc)}</b></td></tr></table>`:`<p class="muted">Nothing yet. Add each payment you receive: the date, the client and the amount.</p>`}
    <p class="muted" style="margin-bottom:0">Count money when you receive it, not when you invoice it.</p></div>
   <div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">Estimated tax payments you made</h3><button class="btn sec" id="padd">${I.plus}Log payment</button></div>
@@ -1931,7 +1969,7 @@ function vEstTax(){
   bindYear();
   document.querySelectorAll('[data-e]').forEach(el=>el.onchange=()=>{const k=el.dataset.e;let v=el.type==='checkbox'?el.checked:el.type==='number'?(parseFloat(el.value)||0):el.value;
     setTaxSetting(s=>{s.est={...(s.est||{}),[k]:v}});vEstTax()});
-  $('#iadd').onclick=()=>incomeForm(null,'income');$('#padd').onclick=()=>incomeForm(null,'payment');
+  $('#iadd').onclick=()=>incomeForm(null,'income');$('#padd').onclick=()=>incomeForm(null,'payment');$('#ixl').onclick=exportIncomeXlsx;
   document.querySelectorAll('.irow').forEach(r=>r.onclick=()=>{const x=incomeRecs.find(y=>y.id===r.dataset.i);incomeForm(x,x.kind)});
 }
 function incomeForm(r,kind){inForm=true;const isNew=!r,pay=kind==='payment';
