@@ -2178,16 +2178,31 @@ const MAX_DOC=15*1024*1024;
 function docUrl(d){return fetch(d.file).then(r=>r.blob()).then(b=>URL.createObjectURL(b))}
 async function openDoc(d){const w=window.open('about:blank','_blank');const u=await docUrl(d);if(w)w.location.href=u;else window.open(u,'_blank')}
 async function saveDocFile(d){const a=document.createElement('a');a.href=await docUrl(d);a.download=d.fname||'tax-document';a.click();setTimeout(()=>URL.revokeObjectURL(a.href),4000)}
+// All tax documents, every year, as an Excel list (the files themselves stay in the app and in Google Drive).
+async function exportTaxDocsXlsx(){
+  const msg=$('#dxmsg');
+  if(!taxdocs.length){msg.textContent='No tax documents to export yet.';return}
+  try{
+    msg.textContent='Building the spreadsheet…';
+    const ds=[...taxdocs].sort((a,b)=>String(a.year).localeCompare(String(b.year))||String(a.type).localeCompare(String(b.type))||String(a.title).localeCompare(String(b.title)));
+    const kind=d=>/pdf/i.test(d.mime||'')?'PDF':/^image\//.test(d.mime||'')?'Photo':d.file?'File':'';
+    const rows=ds.map(d=>[Number(d.year)||String(d.year||''),d.type||'',d.title||'',d.notes||'',d.fname||'',kind(d),d.file?Math.round(d.file.length*0.75/1024):'',d.updated?new Date(d.updated):'']);
+    await sheetDownload(`tax-documents-${today()}.xlsx`,'Tax documents',['Tax year','Type','Title','Notes','File name','File type','Size (KB)','Last updated'],rows,[10,26,34,36,28,10,10,14],[]);
+    const yrs=new Set(ds.map(d=>String(d.year)));
+    msg.textContent=`Exported ${ds.length} document${ds.length===1?'':'s'} from ${yrs.size} year${yrs.size===1?'':'s'}. The spreadsheet lists them; the files themselves stay in the app and in Google Drive.`;
+  }catch(e){msg.textContent=e.message||'Could not build the spreadsheet.'}
+}
 function vTaxDocs(){
   const list=taxdocs.filter(d=>String(d.year)===year);
   $('#main').innerHTML=`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">Tax documents</h3>${yearPicker()}</div>
    <p class="muted">Keep your printable tax forms here: W-9s, 1099s you received, estimated payment confirmations, filled-in Schedule C or anything your accountant sends. Files are saved with your other data to Google Drive. Open one to print it.</p>
-   <div class="actions"><button class="btn" id="dadd">${I.plus}Add tax document</button></div></div>
+   <div class="actions"><button class="btn" id="dadd">${I.plus}Add tax document</button><button class="btn sec" id="dxl">${I.export}Export to spreadsheet</button></div>
+   <p class="muted" id="dxmsg" aria-live="polite" style="margin-bottom:0"></p></div>
   <div class="card">${list.length?list.map(d=>`<div class="item" style="cursor:default">
      ${/^image\//.test(d.mime||'')&&d.file?`<img class="thumb" src="${d.file}" alt="">`:`<div class="thumb">${I.doc}</div>`}
      <div class="main"><div class="t">${esc(d.title||d.fname||d.type)}</div><div class="s">${esc(d.type)}${d.fname?` · ${esc(d.fname)}`:''}${d.notes?` · ${esc(d.notes)}`:''}</div>
       <div class="actions" style="margin-top:6px"><button class="btn sec" data-o="${d.id}">Open / print</button><button class="btn sec" data-d="${d.id}">Download</button><button class="btn sec" data-e="${d.id}">Edit</button></div></div></div>`).join(''):`<p class="muted">No tax documents for ${year} yet.</p>`}</div>`;
-  bindYear();$('#dadd').onclick=()=>docForm();
+  bindYear();$('#dadd').onclick=()=>docForm();$('#dxl').onclick=exportTaxDocsXlsx;
   const byId=id=>taxdocs.find(x=>x.id===id);
   document.querySelectorAll('[data-o]').forEach(b=>b.onclick=()=>openDoc(byId(b.dataset.o)));
   document.querySelectorAll('[data-d]').forEach(b=>b.onclick=()=>saveDocFile(byId(b.dataset.d)));
