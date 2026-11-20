@@ -261,6 +261,19 @@ function guessCategory(text,cats,vendor,hist){
   if(vendor&&hist){const v=vendor.toLowerCase().replace(/[^a-z0-9]/g,''),m=hist.filter(r=>r.category&&String(r.vendor||'').toLowerCase().replace(/[^a-z0-9]/g,'')===v).sort((a,b)=>String(b.date).localeCompare(String(a.date)))[0];if(m)return m.category}
   const head=[vendor,...text.split(/\r?\n/).map(l=>l.trim()).filter(l=>l&&!/\d/.test(l)).slice(0,10)].join(' '); // lines with digits are addresses, phone numbers and prices
   for(const [c,re] of CATMAP)if(re.test(head)){const hit=(cats||[]).find(x=>x.toLowerCase()===c.toLowerCase());if(hit)return hit}return ''}
+// A receipt is normally dated shortly before the photo was taken. If the date we read is far from that day it is probably a misread digit
+// (0/1, 4/9 look alike on thermal paper, e.g. 11/19 read as 01/19): try the look-alike versions, else fall back to the reference day.
+function fixDate(date,ref){
+  if(!ref)return date;
+  const R=new Date(ref+'T12:00:00'),gap=d=>(R-new Date(d+'T12:00:00'))/864e5;
+  if(date&&Math.abs(gap(date))<=90)return date;
+  if(date){const [y,m,d]=date.split('-'),alt={0:'1',1:'0',4:'9',9:'4'},vars=s=>[s,...[...s].map((c,i)=>alt[c]?s.slice(0,i)+alt[c]+s.slice(i+1):null).filter(Boolean)];
+    let best=null;
+    for(const mm of vars(m))for(const dd of vars(d)){const t=`${y}-${mm}-${dd}`,dt=new Date(t+'T12:00:00');
+      if(isNaN(dt)||dt.getMonth()+1!==+mm||dt.getDate()!==+dd)continue;const g=gap(t);if(g>=0&&g<=45&&(!best||g<best.g))best={t,g}}
+    if(best)return best.t}
+  return ref;
+}
 function parseReceipt(text,cats,hist){
   const lines=text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
   const vendor=merchantFrom(text,lines)||parseVendor(lines);
@@ -561,8 +574,7 @@ function receiptForm(r){
     if(scanning)return;scanning=true;
     try{msg.textContent='Reading receipt… 0%';
       const f=await readReceipt(ocrSrc.get(photos[idx])||photos[idx],settings().categories,receipts,p=>{msg.textContent='Reading receipt… '+p+'%'}),got=[];
-      // No readable date, or one months before the photo was taken (a misread digit): use the day the photo was taken.
-      if(fileDate&&idx===0&&(!f.date||(new Date(fileDate)-new Date(f.date))/864e5>90))f.date=fileDate;
+      if(idx===0)f.date=fixDate(f.date,fileDate||(!isNew&&r.date)||''); // reference: the day the photo was taken, or the date already saved
       const set=(id,val,label)=>{if(val===''||val==null||(!force&&touched[id]))return;$('#'+id).value=val;got.push(label)};
       set('v',f.vendor,f.vendor);set('a',f.amount!=null?f.amount.toFixed(2):'',f.amount!=null?money(f.amount):'');set('d',f.date,f.date);set('c',f.category,f.category);
       msg.textContent=got.length?'Read from receipt: '+got.join(' · ')+'. Please check before saving.'+(f.amount==null?' The total was not clear, so enter the amount yourself.':''):'Couldn’t read this receipt clearly. Fill it in by hand, or retake the photo in good light.';
