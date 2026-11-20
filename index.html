@@ -487,6 +487,46 @@ function csv(kind){
     download(`mileage-${year}.csv`,'Date,From,To,Purpose,Client,Billable,Odometer Start,Odometer End,Miles,Round Trip,Deduction,Has Screenshot\n'+[...T.t].sort((a,b)=>a.date.localeCompare(b.date)).map(x=>[x.date,q(x.from),q(x.to),q(x.purpose),q(x.client),x.billable?'Yes':'',x.odoStart??'',x.odoEnd??'',Number(x.miles).toFixed(1),x.roundTrip?'Yes':'',(x.miles*rateFor(x.date)).toFixed(2),(x.photos||[]).length?'Yes':'No'].join(',')).join('\n'));
   }
 }
+// ---- all receipts to an Excel spreadsheet (every year): one sheet of receipts, one of totals by category and year ----
+let xlsxLoad=null;
+function loadXlsx(){return xlsxLoad||(xlsxLoad=new Promise((res,rej)=>{const s=document.createElement('script');
+  s.src='https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
+  s.onload=()=>res(window.XLSX);s.onerror=()=>{xlsxLoad=null;rej(new Error('Could not load the spreadsheet maker. Check your internet connection.'))};document.head.appendChild(s)}))}
+async function exportReceiptsXlsx(){
+  const msg=$('#xmsg');
+  if(!receipts.length){msg.textContent='No receipts to export yet.';return}
+  try{
+    msg.textContent='Building the spreadsheet…';
+    const X=await loadXlsx(),rs=[...receipts].sort((a,b)=>String(a.date).localeCompare(String(b.date))),n=rs.length,amt=r=>Math.round(Number(r.amount||0)*100)/100;
+    const head=['Date','Vendor','Category','Amount','Client','Billable','Invoiced','Notes','Has photo'];
+    const rows=rs.map(r=>[new Date(r.date+'T12:00:00'),r.vendor||'',r.category||'',amt(r),r.client||'',r.billable?'Yes':'',r.invoiced?(r.invoiced===true?'Yes':String(r.invoiced)):'',r.notes||'',(r.photos||[]).length?'Yes':'No']);
+    const ws=X.utils.aoa_to_sheet([head,...rows],{cellDates:true});
+    for(let i=0;i<n;i++){ws['A'+(i+2)].z='yyyy-mm-dd';ws['D'+(i+2)].z='$#,##0.00'}
+    const total=rs.reduce((s,r)=>s+amt(r),0);
+    ws['B'+(n+3)]={t:'s',v:'Total'};ws['D'+(n+3)]={t:'n',v:Math.round(total*100)/100,f:`SUM(D2:D${n+1})`,z:'$#,##0.00'};
+    ws['!ref']=`A1:I${n+3}`;ws['!autofilter']={ref:`A1:I${n+1}`};
+    ws['!cols']=[{wch:12},{wch:28},{wch:16},{wch:12},{wch:20},{wch:9},{wch:12},{wch:40},{wch:10}];
+    // totals by category and year (formulas, so they follow any edits made in the spreadsheet)
+    const years=[...new Set(rs.map(r=>String(r.date).slice(0,4)))].sort(),cats=[...settings().categories,...new Set(rs.map(r=>r.category).filter(c=>c&&!settings().categories.includes(c)))];
+    const col=i=>String.fromCharCode(65+i),R=`$2:$`;
+    const sumif=(c,y)=>rs.filter(r=>r.category===c&&String(r.date).startsWith(y)).reduce((s,r)=>s+amt(r),0);
+    const aoa=[['Category',...years,'All years']];
+    cats.forEach(c=>aoa.push([c]));
+    const ws2=X.utils.aoa_to_sheet(aoa);
+    cats.forEach((c,ci)=>{const r=ci+2;let row=0;
+      years.forEach((y,yi)=>{const v=Math.round(sumif(c,y)*100)/100;row+=v;
+        ws2[col(yi+1)+r]={t:'n',v,z:'$#,##0.00',f:`SUMIFS(Receipts!$D$2:$D$${n+1},Receipts!$C$2:$C$${n+1},$A${r},Receipts!$A$2:$A$${n+1},">="&DATE(${y},1,1),Receipts!$A$2:$A$${n+1},"<="&DATE(${y},12,31))`}});
+      ws2[col(years.length+1)+r]={t:'n',v:Math.round(row*100)/100,z:'$#,##0.00',f:`SUM(B${r}:${col(years.length)}${r})`}});
+    const tr=cats.length+2;ws2['A'+tr]={t:'s',v:'Total'};
+    for(let yi=0;yi<=years.length;yi++){const c=col(yi+1),v=yi<years.length?rs.filter(r=>String(r.date).startsWith(years[yi])).reduce((s,r)=>s+amt(r),0):total;
+      ws2[c+tr]={t:'n',v:Math.round(v*100)/100,z:'$#,##0.00',f:`SUM(${c}2:${c}${tr-1})`}}
+    ws2['!ref']=`A1:${col(years.length+1)}${tr}`;ws2['!cols']=[{wch:18},...years.map(()=>({wch:13})),{wch:13}];
+    const wb=X.utils.book_new();X.utils.book_append_sheet(wb,ws,'Receipts');X.utils.book_append_sheet(wb,ws2,'By category');
+    const out=X.write(wb,{bookType:'xlsx',type:'array',cellDates:true});
+    await download(`receipts-all-${today()}.xlsx`,new Blob([out],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
+    msg.textContent=`Exported ${n} receipt${n===1?'':'s'} from ${years.length} year${years.length===1?'':'s'}, total ${money(total)}.`;
+  }catch(e){msg.textContent=e.message||'Could not build the spreadsheet.'}
+}
 async function report(){
   const body=reportBody();
   let d=null;try{d=await window.claude?.use?.('downloads')}catch(e){}
@@ -597,9 +637,9 @@ function vReceipts(){
   const list=receipts.filter(x=>x.date.startsWith(year));
   const cats=[...settings().categories,...new Set(list.map(x=>x.category).filter(c=>c&&!settings().categories.includes(c)))]; // every category, plus any used on this year's receipts
   $('#main').innerHTML=`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
-    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="add">+ Add receipt</button><button class="btn sec" id="upl">${I.dl.replace('M12 4v11M7 11l5 5 5-5M5 20h14','M12 16V5M7 9l5-5 5 5M5 20h14')}Upload receipts / invoices</button></div>${yearPicker()}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="add">+ Add receipt</button><button class="btn sec" id="upl">${I.dl.replace('M12 4v11M7 11l5 5 5-5M5 20h14','M12 16V5M7 9l5-5 5 5M5 20h14')}Upload receipts / invoices</button><button class="btn sec" id="xl">${I.export}Export to spreadsheet</button></div>${yearPicker()}</div>
     <input type="file" id="ufiles" accept="image/*,.heic,.heif,application/pdf" multiple class="hidden">
-    <p class="muted" style="margin-bottom:0">Upload photos or PDFs, new or from past months. Each one is read and opened for you to check, then saved.</p></div>
+    <p class="muted" style="margin-bottom:0">Upload photos or PDFs, new or from past months. Each one is read and opened for you to check, then saved. “Export to spreadsheet” saves every receipt from every year as an Excel file.</p><p class="muted" id="xmsg" aria-live="polite" style="margin-bottom:0"></p></div>
    <div class="card"><h3 style="margin-top:0">Upload by category</h3>
     <input type="file" id="cfiles" accept="image/*,.heic,.heif,application/pdf" multiple class="hidden">
     ${cats.map((c,i)=>{const rs=list.filter(x=>x.category===c);return `<div class="catrow"><div><b>${esc(c)}</b><div class="muted">${rs.length} receipt${rs.length===1?'':'s'} · ${money(rs.reduce((s,x)=>s+Number(x.amount||0),0))}</div></div><button class="btn sec cupl" data-i="${i}">${I.dl.replace('M12 4v11M7 11l5 5 5-5M5 20h14','M12 16V5M7 9l5-5 5 5M5 20h14')}Upload</button></div>`}).join('')}
@@ -609,7 +649,7 @@ function vReceipts(){
       <div class="main"><div class="t">${esc(x.vendor)}</div><div class="s">${x.date} · ${esc(x.category)}${x.client?` · ${esc(x.client)}`:''}${x.billable?(x.invoiced?' · invoiced':' · billable'):''}${(x.photos||[]).length>1?` · ${x.photos.length} photos`:''}</div></div>
       <div class="amt">${money(x.amount)}</div></div>`).join(''):'<p class="muted">No receipts for this year.</p>'}</div>`;
   bindYear();$('#add').onclick=()=>receiptForm();
-  $('#upl').onclick=()=>$('#ufiles').click();
+  $('#upl').onclick=()=>$('#ufiles').click();$('#xl').onclick=exportReceiptsXlsx;
   let pickCat='';document.querySelectorAll('.cupl').forEach(b=>b.onclick=()=>{pickCat=cats[b.dataset.i];$('#cfiles').click()});
   $('#cfiles').onchange=e=>{const fs=[...e.target.files].filter(f=>isPic(f)||f.type==='application/pdf'||/\.pdf$/i.test(f.name));e.target.value='';if(fs.length)startUploads(fs,pickCat)};
   $('#ufiles').onchange=e=>{const fs=[...e.target.files].filter(f=>isPic(f)||f.type==='application/pdf'||/\.pdf$/i.test(f.name));e.target.value='';if(fs.length)startUploads(fs)};
