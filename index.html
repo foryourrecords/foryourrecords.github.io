@@ -188,12 +188,20 @@ const MONTHS={jan:1,feb:2,mar:3,apr:4,may:5,jun:6,jul:7,aug:8,sep:9,oct:10,nov:1
 function parseAmounts(line){const out=[];const re=/(?:^|[^\d])\$?\s?(\d{1,3}(?:,\d{3})+|\d+)[.,](\d{2})(?!\d)/g;let m;
   while((m=re.exec(line)))out.push(parseFloat(m[1].replace(/,/g,'')+'.'+m[2]));return out;}
 function pickTotal(lines){
-  const good=/grand\s*total|amount\s*due|balance\s*due|total\s*due|\btotal\b/i,bad=/sub\s*-?\s*total|\btax\b|\btip\b|change|cash|tender|discount|saving|points|reward/i;
+  const good=/grand\s*total|amount\s*due|balance\s*due|total\s*due|amount\s*paid|\bt[o0]ta[l1I]\b|\bbalance\b/i,
+        bad=/sub\s*-?\s*total|\btax\b|\btip\b|change|cash|tender|discount|saving|points|reward|coupon|number|items?\b|sold|rounding|\bsaved?\b/i;
+  const amt=(l,i)=>{let a=parseAmounts(l);if(!a.length&&lines[i+1])a=parseAmounts(lines[i+1]);return a};
   let best=null;
   lines.forEach((l,i)=>{if(!good.test(l)||bad.test(l))return;
-    let a=parseAmounts(l);if(!a.length&&lines[i+1])a=parseAmounts(lines[i+1]);
+    const a=amt(l,i);
     if(a.length){const v=a[a.length-1];best=(best===null||/grand|due/i.test(l))?v:Math.max(best,v)}});
-  return best; // no guessing: if no clear total line is found, leave the amount for the user
+  if(best!==null)return best;
+  // No clear total line (faded or cut off). Subtotal + tax is still exact; otherwise the amount on the card / payment line.
+  const last=re=>{let v=null;lines.forEach((l,i)=>{if(re.test(l)){const a=amt(l,i);if(a.length)v=a[a.length-1]}});return v};
+  const sub=last(/sub\s*-?\s*total/i),tax=last(/\btax\b/i);
+  if(sub!=null&&tax!=null&&tax<sub)return Math.round((sub+tax)*100)/100;
+  const pay=last(/visa|master\s*card|amex|american\s*express|discover|debit|credit|\bcard\b/i);
+  return pay;
 }
 function parseDate(text){
   const now=new Date(),min=new Date(now.getFullYear()-3,0,1),max=new Date(now.getTime()+86400000);
@@ -205,8 +213,26 @@ function parseDate(text){
     [/(\d{1,2})[-\/.](\d{1,2})[-\/.](\d{4}|\d{2})(?!\d)/g,a=>ok(+a[3],+a[1],+a[2])],
     [new RegExp('\\b'+mon+'\\s+(\\d{1,2})(?:st|nd|rd|th)?,?\\s+(\\d{4})','gi'),a=>ok(+a[3],MONTHS[a[1].toLowerCase()],+a[2])],
     [new RegExp('\\b(\\d{1,2})\\s+'+mon+',?\\s+(\\d{4})','gi'),a=>ok(+a[3],MONTHS[a[2].toLowerCase()],+a[1])]];
-  for(const [re,f] of pats){let a;while((a=re.exec(text))){const r=f(a);if(r)return r}}
-  return null;
+  // Receipts also print promo dates ("purchases made between Oct. 30 and Dec. 31", "return by Jan. 15"). The purchase date sits next to the time.
+  const cands=[];
+  text.split(/\r?\n/).forEach((line,li)=>{for(const [re,f] of pats){re.lastIndex=0;let a;while((a=re.exec(line))){const r=f(a);if(!r)continue;let sc=0;
+    if(/\d{1,2}\s*[:.]\s*\d{2}/.test(line.slice(a.index+a[0].length,a.index+a[0].length+14)+' '+line.slice(Math.max(0,a.index-10),a.index)))sc+=3;
+    if(/between|through|until|valid|expir|return|polic|before|after|promise|\bby\b|\band\b|\bthru\b|offer|qualify/i.test(line))sc-=4;
+    if(/\bdate\b/i.test(line))sc+=1;
+    cands.push({r,sc,li})}}});
+  cands.sort((x,y)=>y.sc-x.sc||x.li-y.li);
+  return cands.length&&cands[0].sc>=0?cands[0].r:null;
+}
+// Stores we can recognise anywhere on the receipt (logos are pictures, so the name is often only in the footer or web address).
+const MERCH=[['Best Buy','bestbuy'],["Lowe's",'lowes'],['Home Depot','homedepot'],['Walmart','walmart'],['Kroger','kroger'],['Staples','staples'],['Office Depot','officedepot'],['OfficeMax','officemax'],['Costco','costco'],["Sam's Club",'samsclub'],['Amazon','amazon'],['Starbucks','starbucks'],["McDonald's",'mcdonalds'],['Chick-fil-A','chickfila'],["Wendy's",'wendys'],['Dunkin','dunkin'],['Food Lion','foodlion'],['Harris Teeter','harristeeter'],['Walgreens','walgreens'],['AutoZone','autozone'],["O'Reilly Auto Parts",'oreilly'],['Advance Auto Parts','advanceauto'],['Micro Center','microcenter'],['Dollar General','dollargeneral'],['Family Dollar','familydollar'],['Sheetz','sheetz'],['Wawa','wawa'],['Exxon','exxon'],['Chevron','chevron'],['Sunoco','sunoco'],['Speedway','speedway'],['Panera Bread','panerabread'],['Harbor Freight','harborfreight'],['Tractor Supply','tractorsupply'],['Menards','menards'],['Sherwin-Williams','sherwinwilliams'],['FedEx','fedex'],['The UPS Store','upsstore'],['Verizon','verizon']];
+const MERCH_TOP=[['Target','target'],['Shell','shell'],['BP','bp'],['CVS','cvs'],['Subway','subway']];
+function merchantFrom(text,lines){
+  const norm=text.toLowerCase().replace(/[^a-z]/g,'');let best=null;
+  for(const [name,key] of MERCH){const n=norm.split(key).length-1;if(n){const at=norm.indexOf(key);if(!best||n>best.n||(n===best.n&&at<best.at))best={name,n,at}}}
+  if(best)return best.name;
+  const toks=lines.slice(0,8).join(' ').toLowerCase().split(/[^a-z]+/);
+  for(const [name,key] of MERCH_TOP)if(toks.includes(key))return name;
+  return '';
 }
 function parseVendor(lines){
   for(const raw of lines.slice(0,8)){
@@ -216,7 +242,7 @@ function parseVendor(lines){
     const words=l.split(' ').filter(w=>/[A-Za-z]/.test(w)),longest=Math.max(0,...words.map(w=>w.replace(/[^A-Za-z]/g,'').length));
     if(longest<4&&letters<7)continue;            // too short to trust
     if(words.length>2&&letters/words.length<3)continue; // looks like OCR noise ("Sn an am")
-    if(/receipt|invoice|welcome|thank|order|\btel\b|phone|www\.|\.com|^\d{2,}\b|street|\bst\b|\bave\b|\broad\b|\brd\b|suite|store\s*#|cashier|server|table/i.test(l))continue;
+    if(/receipt|invoice|welcome|thank|order|\btel\b|phone|www\.|\.com|^\d{2,}\b|street|\bst\b|\bave\b|\broad\b|\brd\b|suite|store\s*#|cashier|server|table|\b[A-Za-z]{2}\s+\d{5}\b|\bblvd\b|\bhwy\b|\bhighway\b|\bpkwy\b|\bdrive\b|\blane\b|\bapproval\b|\bsubtotal\b|\btotal\b/i.test(l))continue;
     if(l===l.toUpperCase())l=l.toLowerCase().replace(/\b[a-z]/g,c=>c.toUpperCase());
     return l.slice(0,50);}
   return '';
@@ -229,12 +255,67 @@ const CATMAP=[
   ['Supplies',/\b(office|staples|depot|supplies|paper|ink|toner|hardware|lowe'?s)\b/i],
   ['Utilities',/\b(electric|water|internet|wireless|verizon|comcast|spectrum|utility)\b/i],
   ['Advertising',/\b(advertis\w*|marketing|banner)\b/i]];
-function guessCategory(text,cats){for(const [c,re] of CATMAP)if(re.test(text)){const hit=cats.find(x=>x.toLowerCase()===c.toLowerCase());if(hit)return hit}return ''}
-function parseReceipt(text,cats){
+// Same store as a receipt you already saved? Use the category you chose then. Otherwise guess from the store name and the top of the receipt only
+// (the bottom is full of coupons and promos that say things like "fuel discounts").
+function guessCategory(text,cats,vendor,hist){
+  if(vendor&&hist){const v=vendor.toLowerCase().replace(/[^a-z0-9]/g,''),m=hist.filter(r=>r.category&&String(r.vendor||'').toLowerCase().replace(/[^a-z0-9]/g,'')===v).sort((a,b)=>String(b.date).localeCompare(String(a.date)))[0];if(m)return m.category}
+  const head=[vendor,...text.split(/\r?\n/).map(l=>l.trim()).filter(l=>l&&!/\d/.test(l)).slice(0,10)].join(' '); // lines with digits are addresses, phone numbers and prices
+  for(const [c,re] of CATMAP)if(re.test(head)){const hit=(cats||[]).find(x=>x.toLowerCase()===c.toLowerCase());if(hit)return hit}return ''}
+function parseReceipt(text,cats,hist){
   const lines=text.split(/\r?\n/).map(l=>l.trim()).filter(Boolean);
-  return {vendor:parseVendor(lines),amount:pickTotal(lines),date:parseDate(text),category:guessCategory(text,cats||[])};
+  const vendor=merchantFrom(text,lines)||parseVendor(lines);
+  return {vendor,amount:pickTotal(lines),date:parseDate(text),category:guessCategory(text,cats,vendor,hist)};
 }
 // ---- end parser ----
+// ---- receipt photo cleanup: flatten uneven light, boost faint ink, crop to the paper, straighten (all on the device) ----
+function boxBlur(g,w,h,r){const W=w+1,I=new Float64Array(W*(h+1));
+  for(let y=0;y<h;y++){let row=0;for(let x=0;x<w;x++){row+=g[y*w+x];I[(y+1)*W+x+1]=I[y*W+x+1]+row}}
+  const o=new Float32Array(w*h);
+  for(let y=0;y<h;y++){const y0=Math.max(0,y-r),y1=Math.min(h,y+r+1);for(let x=0;x<w;x++){const x0=Math.max(0,x-r),x1=Math.min(w,x+r+1);
+    o[y*w+x]=(I[y1*W+x1]-I[y0*W+x1]-I[y1*W+x0]+I[y0*W+x0])/((y1-y0)*(x1-x0))}}
+  return o}
+function flatten(g,w,h){const bg=boxBlur(g,w,h,Math.max(8,Math.round(Math.min(w,h)/14))),rat=new Float32Array(w*h),hist=new Uint32Array(256);
+  for(let i=0;i<w*h;i++){const v=g[i]/(bg[i]+1);rat[i]=v;hist[Math.max(0,Math.min(255,Math.round(v*200)))]++}
+  let acc=0,p=0;const tgt=w*h*0.02;for(;p<255;p++){acc+=hist[p];if(acc>=tgt)break}
+  const lo=Math.min(0.9,p/200),o=new Uint8ClampedArray(w*h),k=1/Math.max(0.08,1-lo);
+  for(let i=0;i<w*h;i++)o[i]=255-(1-rat[i])*k*255;
+  return o}
+function dropSolids(g,w,h){const ink=new Uint8Array(w*h);for(let i=0;i<w*h;i++)ink[i]=g[i]<110?255:0;
+  const d=boxBlur(ink,w,h,Math.max(4,Math.round(w/110)));for(let i=0;i<w*h;i++)if(d[i]>140)g[i]=255;return g}
+function textBox(g,w,h){const B=Math.max(6,Math.round(Math.min(w,h)/50)),bx=Math.floor(w/B),by=Math.floor(h/B),act=new Uint8Array(bx*by);
+  for(let j=0;j<by;j++)for(let i=0;i<bx;i++){let e=0;for(let y=j*B;y<j*B+B;y++)for(let x=i*B;x<i*B+B-1;x++)if(Math.abs(g[y*w+x]-g[y*w+x+1])>22)e++;act[j*bx+i]=e>=B*0.4?1:0}
+  let x0=1e9,y0=1e9,x1=-1,y1=-1,n=0;
+  for(let j=0;j<by;j++)for(let i=0;i<bx;i++){if(!act[j*bx+i])continue;let c=0;
+    for(let b=-1;b<=1;b++)for(let a=-1;a<=1;a++){if(!a&&!b)continue;const ii=i+a,jj=j+b;if(ii>=0&&jj>=0&&ii<bx&&jj<by&&act[jj*bx+ii])c++}
+    if(c>=2){n++;x0=Math.min(x0,i);x1=Math.max(x1,i);y0=Math.min(y0,j);y1=Math.max(y1,j)}}
+  if(n<12)return null;
+  const pad=2;return {x0:Math.max(0,(x0-pad)*B)/w,y0:Math.max(0,(y0-pad)*B)/h,x1:Math.min(w,(x1+1+pad)*B)/w,y1:Math.min(h,(y1+1+pad)*B)/h}}
+function skewAngle(g,w,h){const pts=[];for(let y=0;y<h;y++)for(let x=0;x<w;x++)if(g[y*w+x]<110)pts.push(x,y);
+  const n=pts.length/2;if(n<200)return 0;
+  const score=a=>{const r=a*Math.PI/180,s=Math.sin(r),c=Math.cos(r),bins=new Float32Array(h*2+2);
+    for(let i=0;i<n;i++){const x=pts[2*i],y=pts[2*i+1];const v=Math.round(y*c-x*s+h);if(v>=0&&v<bins.length)bins[v]++}
+    let t=0;for(let i=0;i<bins.length;i++)t+=bins[i]*bins[i];return t};
+  let best=0,bs=-1;for(let a=-15;a<=15;a+=1){const s=score(a);if(s>bs){bs=s;best=a}}
+  for(let a=best-1;a<=best+1;a+=0.25){const s=score(a);if(s>bs){bs=s;best=a}}
+  return Math.abs(best)<0.4?0:best}
+const mkCanvas=(w,h)=>{const c=document.createElement('canvas');c.width=w;c.height=h;return c};
+const loadImg=src=>new Promise((res,rej)=>{const i=new Image();i.onload=()=>res(i);i.onerror=()=>rej(new Error('Could not read image'));i.src=src});
+function greyOf(c){const w=c.width,h=c.height,d=c.getContext('2d').getImageData(0,0,w,h).data,g=new Uint8ClampedArray(w*h);for(let i=0;i<w*h;i++)g[i]=0.299*d[4*i]+0.587*d[4*i+1]+0.114*d[4*i+2];return g}
+function canvasOf(g,w,h){const c=mkCanvas(w,h),x=c.getContext('2d'),id=x.createImageData(w,h);for(let i=0;i<w*h;i++){id.data[4*i]=id.data[4*i+1]=id.data[4*i+2]=g[i];id.data[4*i+3]=255}x.putImageData(id,0,0);return c}
+async function prepImage(src){
+  const img=await loadImg(src),iw=img.naturalWidth,ih=img.naturalHeight;
+  const sw=500,sh=Math.max(1,Math.round(ih*sw/iw)),sc=mkCanvas(sw,sh);sc.getContext('2d').drawImage(img,0,0,sw,sh);
+  const box=textBox(greyOf(sc),sw,sh);let sx=0,sy=0,cw=iw,ch=ih;
+  if(box&&(box.x1-box.x0)*(box.y1-box.y0)<0.85){sx=box.x0*iw;sy=box.y0*ih;cw=(box.x1-box.x0)*iw;ch=(box.y1-box.y0)*ih}
+  const k=Math.min(2.5,Math.max(0.4,1800/Math.max(cw,ch))),W=Math.round(cw*k),H=Math.round(ch*k),c=mkCanvas(W,H);
+  c.getContext('2d').drawImage(img,sx,sy,cw,ch,0,0,W,H);
+  const g=dropSolids(flatten(greyOf(c),W,H),W,H),gc=canvasOf(g,W,H);
+  const ssw=600,ssh=Math.max(1,Math.round(H*ssw/W)),ss=mkCanvas(ssw,ssh);ss.getContext('2d').drawImage(gc,0,0,ssw,ssh);
+  const ang=skewAngle(greyOf(ss),ssw,ssh);
+  if(!ang)return gc;
+  const r=ang*Math.PI/180,cs=Math.abs(Math.cos(r)),sn=Math.abs(Math.sin(r)),RW=Math.round(W*cs+H*sn),RH=Math.round(W*sn+H*cs),rc=mkCanvas(RW,RH),x=rc.getContext('2d');
+  x.fillStyle='#fff';x.fillRect(0,0,RW,RH);x.translate(RW/2,RH/2);x.rotate(-r);x.drawImage(gc,-W/2,-H/2);return rc;
+}
 // OCR runs in the browser (Tesseract.js); photos never leave the device.
 let tessLoad=null;
 function loadTess(){return tessLoad||(tessLoad=new Promise((res,rej)=>{const s=document.createElement('script');
@@ -244,6 +325,17 @@ async function ocr(dataUrl,onProgress){const T=await loadTess();
   const r=await T.recognize(dataUrl,'eng',{logger:m=>{if(m.status==='recognizing text'&&onProgress)onProgress(Math.round(m.progress*100))}});
   ocrLines=(r.data.lines||[]).map(l=>({text:l.text.trim(),conf:l.confidence,y:l.bbox.y0}));return r.data.text}
 let ocrLines=[];
+const ocrSrc=new Map(); // photo (as saved) -> larger copy used only for reading
+// Read a receipt photo: cleaned-up copy first; if that leaves the vendor, amount or date empty, also read the untouched photo and fill the gaps.
+async function readReceipt(src,cats,hist,onProgress){
+  const score=f=>f?(f.vendor?1:0)+(f.amount!=null?1:0)+(f.date?1:0):-1;
+  let a=null,b=null;
+  try{a=parseReceipt(await ocr(await prepImage(src),p=>onProgress&&onProgress(Math.round(p/2))),cats,hist)}catch(e){if(/load the receipt reader/.test(e.message))throw e}
+  if(score(a)<3){b=parseReceipt(await ocr(src,p=>onProgress&&onProgress(50+Math.round(p/2))),cats,hist)}
+  const out={vendor:'',amount:null,date:null,category:''};
+  for(const f of [a,b].filter(Boolean).sort((x,y)=>score(y)-score(x)))for(const k in out)if(out[k]===''||out[k]==null)out[k]=f[k]??out[k];
+  return out;
+}
 
 // compress image to JPEG data URL
 function compress(file,max=1600,q=0.75){return new Promise((res,rej)=>{
@@ -462,21 +554,24 @@ function receiptForm(r){
     $('#ph').querySelectorAll('.x').forEach(b=>b.onclick=()=>{photos.splice(b.dataset.i,1);pids.splice(b.dataset.i,1);drawP()});};
   drawP();
   const touched={};['d','a','v','c'].forEach(k=>['input','change'].forEach(ev=>$('#'+k).addEventListener(ev,()=>{touched[k]=true})));
-  let scanning=false;
+  let scanning=false,fileDate='';
   const scan=async(idx,force)=>{
     const msg=$('#scanmsg');
     if(!photos[idx]){msg.textContent='Add a photo first.';return}
     if(scanning)return;scanning=true;
     try{msg.textContent='Reading receipt… 0%';
-      const text=await ocr(photos[idx],p=>{msg.textContent='Reading receipt… '+p+'%'});
-      const f=parseReceipt(text,settings().categories),got=[];
+      const f=await readReceipt(ocrSrc.get(photos[idx])||photos[idx],settings().categories,receipts,p=>{msg.textContent='Reading receipt… '+p+'%'}),got=[];
+      // No readable date, or one months before the photo was taken (a misread digit): use the day the photo was taken.
+      if(fileDate&&idx===0&&(!f.date||(new Date(fileDate)-new Date(f.date))/864e5>90))f.date=fileDate;
       const set=(id,val,label)=>{if(val===''||val==null||(!force&&touched[id]))return;$('#'+id).value=val;got.push(label)};
       set('v',f.vendor,f.vendor);set('a',f.amount!=null?f.amount.toFixed(2):'',f.amount!=null?money(f.amount):'');set('d',f.date,f.date);set('c',f.category,f.category);
       msg.textContent=got.length?'Read from receipt: '+got.join(' · ')+'. Please check before saving.'+(f.amount==null?' The total was not clear, so enter the amount yourself.':''):'Couldn’t read this receipt clearly. Fill it in by hand, or retake the photo in good light.';
     }catch(e){msg.textContent=e.message||'Could not read the receipt.'}
     scanning=false;};
   const add=async fs=>{const wasEmpty=photos.length===0;
-    for(const f of fs){try{photos.push(await compress(f));pids.push(uid())}catch(e){alert(e.message)}}
+    for(const f of fs){try{const p=await compress(f);photos.push(p);pids.push(uid());
+      ocrSrc.set(p,await compress(f,2600,0.92)); // bigger copy kept only for reading the receipt; the saved photo stays small
+      if(!fileDate&&f.lastModified){const d=new Date(f.lastModified);fileDate=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`}}catch(e){alert(e.message)}}
     drawP();if(wasEmpty&&photos.length&&settings().autoscan!==false)scan(0,false)};
   $('#scan').onclick=()=>scan(0,true);
   $('#cam').onclick=()=>$('#f1').click();$('#up').onclick=()=>$('#f2').click();
