@@ -527,6 +527,36 @@ async function exportReceiptsXlsx(){
     msg.textContent=`Exported ${n} receipt${n===1?'':'s'} from ${years.length} year${years.length===1?'':'s'}, total ${money(total)}.`;
   }catch(e){msg.textContent=e.message||'Could not build the spreadsheet.'}
 }
+// ---- all mileage to an Excel spreadsheet (every year): one sheet of trips, one of miles and deduction by year ----
+async function exportMileageXlsx(){
+  const msg=$('#mxmsg');
+  if(!trips.length){msg.textContent='No trips to export yet.';return}
+  try{
+    msg.textContent='Building the spreadsheet…';
+    const X=await loadXlsx(),ts=[...trips].sort((a,b)=>String(a.date).localeCompare(String(b.date))),n=ts.length,r2=v=>Math.round(v*100)/100;
+    const head=['Date','From','To','Purpose','Client','Billable','Odometer start','Odometer end','Miles','Round trip','Rate per mile','Deduction','Has screenshot'];
+    const rows=ts.map(t=>{const rate=rateFor(t.date),mi=Math.round(Number(t.miles||0)*10)/10;
+      return [new Date(t.date+'T12:00:00'),t.from||'',t.to||'',t.purpose||'',t.client||'',t.billable?'Yes':'',t.odoStart??'',t.odoEnd??'',mi,t.roundTrip?'Yes':'',rate,r2(mi*rate),(t.photos||[]).length?'Yes':'No']});
+    const ws=X.utils.aoa_to_sheet([head,...rows],{cellDates:true});
+    for(let i=0;i<n;i++){const r=i+2;ws['A'+r].z='yyyy-mm-dd';ws['I'+r].z='#,##0.0';ws['K'+r].z='$0.000';
+      ws['L'+r]={t:'n',v:rows[i][11],f:`I${r}*K${r}`,z:'$#,##0.00'}} // deduction follows the miles and rate if edited
+    const totMi=r2(ts.reduce((s,t)=>s+Number(t.miles||0),0)),totDed=r2(rows.reduce((s,r)=>s+r[11],0));
+    ws['B'+(n+3)]={t:'s',v:'Total'};ws['I'+(n+3)]={t:'n',v:totMi,f:`SUM(I2:I${n+1})`,z:'#,##0.0'};ws['L'+(n+3)]={t:'n',v:totDed,f:`SUM(L2:L${n+1})`,z:'$#,##0.00'};
+    ws['!ref']=`A1:M${n+3}`;ws['!autofilter']={ref:`A1:M${n+1}`};
+    ws['!cols']=[{wch:12},{wch:28},{wch:28},{wch:22},{wch:18},{wch:9},{wch:15},{wch:14},{wch:9},{wch:11},{wch:13},{wch:12},{wch:15}];
+    const years=[...new Set(ts.map(t=>String(t.date).slice(0,4)))].sort(),ws2=X.utils.aoa_to_sheet([['Year','Trips','Miles','Deduction'],...years.map(y=>[y])]);
+    years.forEach((y,i)=>{const r=i+2,ys=ts.filter(t=>String(t.date).startsWith(y)),rng=c=>`Trips!$${c}$2:$${c}$${n+1}`,between=`${rng('A')},">="&DATE(${y},1,1),${rng('A')},"<="&DATE(${y},12,31)`;
+      ws2['B'+r]={t:'n',v:ys.length,f:`COUNTIFS(${between})`};
+      ws2['C'+r]={t:'n',v:r2(ys.reduce((s,t)=>s+Number(t.miles||0),0)),f:`SUMIFS(${rng('I')},${between})`,z:'#,##0.0'};
+      ws2['D'+r]={t:'n',v:r2(ys.reduce((s,t)=>s+Number(t.miles||0)*rateFor(t.date),0)),f:`SUMIFS(${rng('L')},${between})`,z:'$#,##0.00'}});
+    const tr=years.length+2;ws2['A'+tr]={t:'s',v:'Total'};ws2['B'+tr]={t:'n',v:n,f:`SUM(B2:B${tr-1})`};
+    ws2['C'+tr]={t:'n',v:totMi,f:`SUM(C2:C${tr-1})`,z:'#,##0.0'};ws2['D'+tr]={t:'n',v:totDed,f:`SUM(D2:D${tr-1})`,z:'$#,##0.00'};
+    ws2['!ref']=`A1:D${tr}`;ws2['!cols']=[{wch:10},{wch:8},{wch:12},{wch:14}];
+    const wb=X.utils.book_new();X.utils.book_append_sheet(wb,ws,'Trips');X.utils.book_append_sheet(wb,ws2,'By year');
+    await download(`mileage-all-${today()}.xlsx`,new Blob([X.write(wb,{bookType:'xlsx',type:'array',cellDates:true})],{type:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}));
+    msg.textContent=`Exported ${n} trip${n===1?'':'s'} from ${years.length} year${years.length===1?'':'s'}: ${totMi.toFixed(1)} miles, ${money(totDed)} deduction.`;
+  }catch(e){msg.textContent=e.message||'Could not build the spreadsheet.'}
+}
 async function report(){
   const body=reportBody();
   let d=null;try{d=await window.claude?.use?.('downloads')}catch(e){}
@@ -730,14 +760,14 @@ function vMileage(){
   upQueue=[];upTotal=0;
   const list=trips.filter(x=>x.date.startsWith(year));
   $('#main').innerHTML=`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
-    <div class="actions" style="margin:0"><button class="btn" id="add">+ Add trip</button><button class="btn sec" id="mupl">${I.dl.replace('M12 4v11M7 11l5 5 5-5M5 20h14','M12 16V5M7 9l5-5 5 5M5 20h14')}Upload route screenshots</button><button class="btn sec" id="trk">${I.pin}GPS (screen on)</button><button class="btn sec" id="calb">${I.cal}Trips from calendar</button></div>${yearPicker()}</div>
+    <div class="actions" style="margin:0"><button class="btn" id="add">+ Add trip</button><button class="btn sec" id="mupl">${I.dl.replace('M12 4v11M7 11l5 5 5-5M5 20h14','M12 16V5M7 9l5-5 5 5M5 20h14')}Upload route screenshots</button><button class="btn sec" id="mxl">${I.export}Export to spreadsheet</button><button class="btn sec" id="trk">${I.pin}GPS (screen on)</button><button class="btn sec" id="calb">${I.cal}Trips from calendar</button></div>${yearPicker()}</div>
     <input type="file" id="mfiles" accept="image/*,.heic,.heif" multiple class="hidden">
-    <p class="muted" style="margin-bottom:0">Upload Google Maps route screenshots, new or from past trips. Each one becomes a trip with the miles and addresses read from it, opened for you to check, then saved.</p></div>
+    <p class="muted" style="margin-bottom:0">Upload Google Maps route screenshots, new or from past trips. Each one becomes a trip with the miles and addresses read from it, opened for you to check, then saved. “Export to spreadsheet” saves every trip from every year as an Excel file.</p><p class="muted" id="mxmsg" aria-live="polite" style="margin-bottom:0"></p></div>
    <div class="card">${list.length?list.map(x=>`<div class="item" data-id="${x.id}">${(x.photos||[])[0]?`<img class="thumb" src="${x.photos[0]}" alt="Route screenshot">`:'<div class="thumb">'+I.car+'</div>'}
       <div class="main"><div class="t">${esc(x.from||'—')} → ${esc(x.to||'—')}</div><div class="s">${x.date} · ${esc(x.purpose)}${x.roundTrip?' · round trip':''}${x.client?` · ${esc(x.client)}`:''}${x.billable?(x.invoiced?' · invoiced':' · billable'):''}</div></div>
       <div class="amt">${Number(x.miles).toFixed(1)} mi</div></div>`).join(''):'<p class="muted">No trips for this year.</p>'}</div>`;
   bindYear();$('#add').onclick=()=>tripForm();$('#trk').onclick=gpsView;$('#calb').onclick=calTrips;
-  $('#mupl').onclick=()=>$('#mfiles').click();
+  $('#mupl').onclick=()=>$('#mfiles').click();$('#mxl').onclick=exportMileageXlsx;
   $('#mfiles').onchange=e=>{const fs=[...e.target.files].filter(isPic);e.target.value='';if(fs.length)startUploads(fs,'','trip')};
   document.querySelectorAll('.item').forEach(e=>e.onclick=()=>tripForm(trips.find(t=>t.id===e.dataset.id)));
 }
