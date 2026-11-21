@@ -160,6 +160,14 @@ td.r,th.r{text-align:right}
 .findsum{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:10px;min-height:30px}
 .findsum .link{background:none;border:0;color:var(--accent);font:inherit;font-size:13px;font-weight:600;cursor:pointer;padding:6px 0}
 @media (max-width:560px){.find,.find.two{grid-template-columns:1fr 1fr}.find .q{grid-column:1/-1}}
+.remind{display:flex;gap:12px;align-items:flex-start;border-left:4px solid var(--accent)}
+.remind.late{border-left-color:var(--danger)}
+.remind .ico{flex:none;width:36px;height:36px;border-radius:10px;display:grid;place-items:center;background:var(--tint);color:var(--accent)}
+.remind.late .ico{color:var(--danger);background:transparent;border:1px solid var(--danger)}
+.remind .body{flex:1;min-width:0}
+.remind h3{margin:0 0 2px}
+.remind .actions{margin-top:10px}
+.remind .btn{min-height:38px;padding:7px 12px;font-size:14px}
 #lightbox{position:fixed;inset:0;background:rgba(0,0,0,.88);display:none;justify-content:center;z-index:50;padding:10px;overflow:auto;-webkit-overflow-scrolling:touch}
 #lightbox img{width:100%;max-width:900px;height:auto;margin:auto;border-radius:8px;background:#fff}
 .gps{text-align:center}
@@ -527,9 +535,74 @@ function totals(){
   return {r,t,by,spent,miles,ded:mileageAmount(t,rateFn()),rateNote:rateLabel(rateFn(),t)};
 }
 
+// ---------- reminders ----------
+// Shown at the top of Summary: an estimated tax payment coming up in the next 30 days or recently missed, and a nudge
+// when nothing has been logged for three weeks. "Hide for a week" puts one away. The due dates can also be saved to the
+// phone's own calendar as a file, so the phone alerts you even when this app is closed (no server or extra permission needed).
+const RM_KEY='et-remind-hide';
+const rmHidden=()=>{try{return JSON.parse(localStorage.getItem(RM_KEY)||'{}')||{}}catch(e){return {}}};
+function rmHide(id,days){const h=rmHidden(),now=Date.now();for(const k in h)if(!(h[k]>now))delete h[k];h[id]=now+days*86400000;try{localStorage.setItem(RM_KEY,JSON.stringify(h))}catch(e){}}
+const daysUntil=iso=>Math.round((Date.parse(iso)-Date.parse(today()))/86400000);
+const niceDate=iso=>new Date(iso+'T12:00:00').toLocaleDateString(undefined,{month:'short',day:'numeric',year:'numeric'});
+const nextDay=iso=>{const d=new Date(iso+'T12:00:00Z');d.setUTCDate(d.getUTCDate()+1);return d.toISOString().slice(0,10)};
+const hasIncome=ty=>incomeRecs.some(x=>x.kind==='income'&&String(x.date).startsWith(String(ty)));
+function estFor(ty){const keep=year;year=String(ty);try{return estCalc()}finally{year=keep}} // the estimate for any tax year, without changing the year on screen
+function reminders(){
+  const out=[],hid=rmHidden(),now=Date.now(),Y=new Date().getFullYear();
+  for(const ty of [Y-1,Y]){ // January's payment belongs to last year's taxes
+    if(!hasIncome(ty))continue;
+    let C;try{C=estFor(ty)}catch(e){continue}
+    const n=C.plan.next;if(!n||!(n.amount>0))continue;
+    const d=daysUntil(n.due);if(n.overdue?daysUntil(qDueDates(ty)[3])<-60:d>30)continue; // a missed payment keeps showing until 60 days after that tax year's last due date
+    out.push({id:`tax-${ty}-q${n.q}-${n.overdue?'late':'soon'}`,kind:'tax',late:n.overdue,ty:String(ty),
+      title:n.overdue?'Estimated tax payment is past due':`Estimated tax due ${d===0?'today':d===1?'tomorrow':`in ${d} days`}`,
+      text:n.overdue?`Catch up through Q${n.q} of ${ty}: about ${money(n.amount)}. It was due ${niceDate(n.due)}.`:`Q${n.q} payment for ${ty}: about ${money(n.amount)}, due ${niceDate(n.due)}.`})}
+  const stamps=[...receipts,...trips].map(x=>Math.max(Number(x.updated)||0,Date.parse(x.date)||0)).filter(v=>v>0);
+  if(stamps.length){const last=Math.max(...stamps),idle=Math.floor((now-last)/86400000);
+    if(idle>=21)out.push({id:'idle',kind:'idle',title:`Nothing logged in ${Math.floor(idle/7)} weeks`,
+      text:`Add any receipts or business trips since ${niceDate(new Date(last).toISOString().slice(0,10))} while they're easy to remember.`})}
+  return out.filter(r=>!(hid[r.id]>now))}
+function reminderCards(){return reminders().map(r=>`<div class="card remind${r.late?' late':''}" data-rid="${r.id}"><div class="ico">${r.kind==='tax'?I.cal:I.receipt}</div><div class="body">
+  <h3>${esc(r.title)}</h3><div class="muted" style="font-size:14px">${esc(r.text)}</div>
+  <div class="actions">${r.kind==='tax'?`<button class="btn rm-go" data-ty="${r.ty}">Open estimated tax</button><button class="btn sec rm-cal">${I.cal}Add to calendar</button>`
+    :`<button class="btn rm-r">${I.plus}Add receipt</button><button class="btn sec rm-t">${I.plus}Add trip</button>`}<button class="btn sec rm-hide">Hide for a week</button></div>
+  <p class="muted rm-msg" aria-live="polite" style="margin-bottom:0"></p></div></div>`).join('')}
+function wireReminders(){
+  document.querySelectorAll('.remind').forEach(c=>{const q=s=>c.querySelector(s);
+    if(q('.rm-go'))q('.rm-go').onclick=()=>{year=q('.rm-go').dataset.ty;view='esttax';render();window.scrollTo(0,0)};
+    if(q('.rm-cal'))q('.rm-cal').onclick=()=>calendarFile(false,q('.rm-msg'));
+    if(q('.rm-r'))q('.rm-r').onclick=()=>{view='receipts';render();receiptForm()};
+    if(q('.rm-t'))q('.rm-t').onclick=()=>{view='mileage';render();tripForm()};
+    q('.rm-hide').onclick=()=>{rmHide(c.dataset.rid,7);c.remove()}})}
+// Calendar file (.ics): every estimated tax due date in the next 12 months that isn't paid yet, each with alerts at 9 am a week
+// before and the day before. Optional: a reminder at 9 am on the 1st of every month to log receipts and mileage.
+// Fixed IDs, so saving the file again updates the same events in most calendar apps instead of adding copies.
+const icsText=v=>String(v).replace(/\\/g,'\\\\').replace(/\n/g,'\\n').replace(/([,;])/g,'\\$1');
+function icsFold(line){const enc=new TextEncoder(),out=[];let cur='',n=0;
+  for(const ch of line){const b=enc.encode(ch).length;if(n+b>75){out.push(cur);cur=' ';n=1}cur+=ch;n+=b}out.push(cur);return out.join('\r\n')}
+function calendarFile(monthly,msgEl){
+  const t=today(),Y=new Date().getFullYear(),end=new Date(Date.now()+366*86400000).toISOString().slice(0,10),stamp=new Date().toISOString().replace(/[-:]/g,'').replace(/\.\d+/,''),D=iso=>iso.replace(/-/g,''),ev=[];
+  const alarm=(when,text)=>['BEGIN:VALARM','ACTION:DISPLAY','DESCRIPTION:'+icsText(text),'TRIGGER:'+when,'END:VALARM'];
+  for(const ty of [Y-1,Y,Y+1]){let C=null;try{if(hasIncome(ty))C=estFor(ty)}catch(e){}
+    qDueDates(ty).forEach((d,i)=>{if(d<t||d>end)return;const row=C&&C.plan.rows[i];if(row&&row.status==='paid')return;
+      const amt=row&&C.planTotal>0?row.installment:0,name=`Q${i+1} ${ty}`;
+      ev.push(['BEGIN:VEVENT',`UID:fyr-esttax-${ty}-q${i+1}@foryourrecords.github.io`,'DTSTAMP:'+stamp,'DTSTART;VALUE=DATE:'+D(d),'DTEND;VALUE=DATE:'+D(nextDay(d)),
+        'SUMMARY:'+icsText(`Estimated tax payment due (${name})`),
+        'DESCRIPTION:'+icsText((amt?`For Your Records planned about ${money(amt)} for this payment when you saved this reminder. Open the app for the current amount.\n\n`:'')+'Pay at https://www.irs.gov/payments/direct-pay and then log the payment in For Your Records: https://foryourrecords.github.io/'),
+        'TRANSP:TRANSPARENT',...alarm('-P6DT15H',`Estimated tax due in a week (${name})`),...alarm('-PT15H',`Estimated tax due tomorrow (${name})`),'END:VEVENT'])})}
+  const taxN=ev.length;
+  if(monthly){const n=new Date(),f=new Date(n.getFullYear(),n.getMonth()+1,1),iso=`${f.getFullYear()}-${String(f.getMonth()+1).padStart(2,'0')}-01`;
+    ev.push(['BEGIN:VEVENT','UID:fyr-monthly-log@foryourrecords.github.io','DTSTAMP:'+stamp,'DTSTART;VALUE=DATE:'+D(iso),'DTEND;VALUE=DATE:'+D(nextDay(iso)),'RRULE:FREQ=MONTHLY;BYMONTHDAY=1',
+      'SUMMARY:'+icsText('Log receipts and mileage'),'DESCRIPTION:'+icsText("Add last month's receipts and business trips in For Your Records: https://foryourrecords.github.io/"),
+      'TRANSP:TRANSPARENT',...alarm('PT9H','Log receipts and mileage in For Your Records'),'END:VEVENT'])}
+  const lines=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//For Your Records//Reminders//EN','CALSCALE:GREGORIAN','METHOD:PUBLISH',...ev.flat(),'END:VCALENDAR'];
+  download('for-your-records-reminders.ics',lines.map(icsFold).join('\r\n')+'\r\n','text/calendar');
+  if(msgEl)msgEl.textContent=`Saved a calendar file with ${taxN} tax due date${taxN===1?'':'s'}${monthly?' and a monthly reminder':''}. Open it and choose Add All to put them in your calendar.`}
+
 function vSummary(){
   const T=totals();
   $('#main').innerHTML=`
+  ${reminderCards()}
   ${homeCards()}
   <div class="card"><div style="display:flex;justify-content:space-between;align-items:center"><h3 style="margin:0">Tax year</h3>${yearPicker()}</div>
    <div class="stats" style="margin-top:12px">
@@ -548,7 +621,7 @@ function vSummary(){
    <p class="muted">One file for your accountant: summary, receipts and mileage spreadsheets, a printable report, and every receipt photo sorted by category.</p>
    <div class="actions"><button class="btn sec" id="csvR">Receipts CSV</button><button class="btn sec" id="csvT">Mileage CSV</button><button class="btn sec" id="pdf">PDF report with photos</button></div>
    <p class="muted">The report includes your receipt photos. Open it and use Print → Save as PDF.</p></div>`;
-  wireHome();bindYear();const ag=$('#auditgo');if(ag)ag.onclick=()=>{view='audit';render();window.scrollTo(0,0)};$('#pkg').onclick=e=>packageExport(e.currentTarget);$('#stmx').onclick=()=>statementView();$('#qbx').onclick=()=>{view='qbexport';render();window.scrollTo(0,0)};
+  wireHome();wireReminders();bindYear();const ag=$('#auditgo');if(ag)ag.onclick=()=>{view='audit';render();window.scrollTo(0,0)};$('#pkg').onclick=e=>packageExport(e.currentTarget);$('#stmx').onclick=()=>statementView();$('#qbx').onclick=()=>{view='qbexport';render();window.scrollTo(0,0)};
   document.querySelectorAll('.stmbtn').forEach(b=>b.onclick=()=>statementView(b.dataset.c));$('#csvR').onclick=()=>csv('receipts');$('#csvT').onclick=()=>csv('trips');$('#pdf').onclick=report;
 }
 
@@ -2087,6 +2160,11 @@ function vEstTax(){
    ${plan.rows.map(r=>`<tr><td>${QN[r.q-1]}</td><td>${r.due}</td><td class="r">${money(r.installment)}</td><td class="r">${money(r.paid)}</td><td>${r.status==='paid'?'✔':r.status==='overdue'?'<span style="color:var(--danger)">late</span>':''}</td></tr>`).join('')}
    <tr><td colspan="2"><b>Total</b></td><td class="r"><b>${money(C.planTotal)}</b></td><td class="r"><b>${money(plan.paidTotal)}</b></td><td></td></tr></table>
    ${C.E.prior>0&&C.shNeeded!==null?`<p class="muted" style="margin-bottom:0">Safe-harbor minimum (to avoid an underpayment penalty): about ${money(C.shNeeded)}. ${C.E.plan==='safe'?'The plan above uses this lower amount, so you may owe more when you file.':'The plan above uses the full estimate. You can switch to the minimum in the settings below.'}</p>`:`<p class="muted" style="margin-bottom:0">Add last year's total tax in the settings below to see the safe-harbor minimum.</p>`}</div>
+  <div class="card"><h3 style="margin-top:0">Reminders on your phone</h3>
+   <p class="muted">Save the payment due dates to your phone's calendar. It alerts you a week before and the day before each one, even when this app is closed.</p>
+   <label style="display:flex;gap:10px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" id="calmon" style="width:auto"> Also remind me on the 1st of each month to log receipts and mileage</label>
+   <div class="actions"><button class="btn sec" id="calgo">${I.cal}Add due dates to my calendar</button></div>
+   <p class="muted" id="calmsg" aria-live="polite" style="margin-bottom:0"></p></div>
   <div class="card"><h3 style="margin-top:0">How it was figured</h3><table>
    <tr><td>Income${C.proj>1?' (projected)':''}</td><td class="r">${money(C.inc*C.proj)}</td></tr>
    <tr><td>Expenses (Schedule C total)${C.proj>1?' (projected)':''}</td><td class="r">−${money(C.expenses*C.proj)}</td></tr>
@@ -2124,6 +2202,7 @@ function vEstTax(){
   bindYear();
   document.querySelectorAll('[data-e]').forEach(el=>el.onchange=()=>{const k=el.dataset.e;let v=el.type==='checkbox'?el.checked:el.type==='number'?(parseFloat(el.value)||0):el.value;
     setTaxSetting(s=>{s.est={...(s.est||{}),[k]:v}});vEstTax()});
+  $('#calgo').onclick=()=>calendarFile($('#calmon').checked,$('#calmsg'));
   $('#iadd').onclick=()=>incomeForm(null,'income');$('#padd').onclick=()=>incomeForm(null,'payment');$('#ixl').onclick=exportIncomeXlsx;$('#mixl').onclick=exportMileageIncomeXlsx;
   document.querySelectorAll('.irow').forEach(r=>r.onclick=()=>{const x=incomeRecs.find(y=>y.id===r.dataset.i);incomeForm(x,x.kind)});
 }
