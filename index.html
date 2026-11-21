@@ -151,6 +151,15 @@ tr:last-child td{border-bottom:0}
 td.r,th.r{text-align:right}
 .hidden{display:none}
 .muted{color:var(--muted);font-size:13px}
+.find{display:grid;grid-template-columns:minmax(0,2fr) minmax(0,1fr) minmax(0,1fr);gap:10px;align-items:end}
+.find.two{grid-template-columns:minmax(0,2fr) minmax(0,1fr)}
+.find label{margin-top:0}
+.find .qi{position:relative}
+.find .qi svg{position:absolute;left:13px;top:50%;transform:translateY(-50%);color:var(--muted);pointer-events:none}
+.find .qi input{padding-left:40px;-webkit-appearance:none;appearance:none}
+.findsum{display:flex;justify-content:space-between;align-items:center;gap:8px;margin-top:10px;min-height:30px}
+.findsum .link{background:none;border:0;color:var(--accent);font:inherit;font-size:13px;font-weight:600;cursor:pointer;padding:6px 0}
+@media (max-width:560px){.find,.find.two{grid-template-columns:1fr 1fr}.find .q{grid-column:1/-1}}
 #lightbox{position:fixed;inset:0;background:rgba(0,0,0,.88);display:none;justify-content:center;z-index:50;padding:10px;overflow:auto;-webkit-overflow-scrolling:touch}
 #lightbox img{width:100%;max-width:900px;height:auto;margin:auto;border-radius:8px;background:#fff}
 .gps{text-align:center}
@@ -731,11 +740,39 @@ async function packageExport(btn){
   btn.disabled=false;btn.innerHTML=label;
 }
 
+// ----- search and filters -----
+// What you type and pick stays put while you open, edit and save items; reloading the app clears it.
+const flt={r:{q:'',cat:'',when:''},t:{q:'',when:''}};
+const ISEARCH=SVI('<circle cx="11" cy="11" r="6.5"/><path d="m20 20-4.2-4.2"/>');
+function whenMonths(items){return [...new Set(items.filter(x=>String(x.date).startsWith(year)).map(x=>String(x.date).slice(5,7)))].sort()}
+function whenOptions(sel,ms){return `<option value="" ${!sel?'selected':''}>All of ${year}</option>${ms.map(m=>`<option value="${m}" ${sel===m?'selected':''}>${MONTH_NAMES[+m-1]} ${year}</option>`).join('')}<option value="all" ${sel==='all'?'selected':''}>Every year</option>`}
+function inWhen(x,when){const d=String(x.date);return when==='all'?true:when?d.startsWith(year+'-'+when):d.startsWith(year)}
+function hits(q,fields){ // every word typed has to appear somewhere in the item; "$45" finds 45.00
+  const words=String(q||'').toLowerCase().split(/\s+/).map(w=>w.replace(/^\$/,'').replace(/,/g,'')).filter(Boolean);if(!words.length)return true;
+  const hay=fields.map(v=>String(v??'').toLowerCase()).join(' \n ');return words.every(w=>hay.includes(w))}
+function findBar(kind,label,ph,extra,when,ms){return `<div class="card"><div class="find${extra?'':' two'}" role="search">
+    <div class="q"><label for="fq">${label}</label><div class="qi">${ISEARCH}<input id="fq" type="search" enterkeyhint="search" autocomplete="off" placeholder="${ph}" value="${esc(flt[kind].q)}"></div></div>
+    ${extra}<div><label for="fw">When</label><select id="fw">${whenOptions(when,ms)}</select></div></div>
+    <div class="findsum"><span class="muted" id="fsum" aria-live="polite"></span><button type="button" class="link" id="fclr" hidden>Clear search</button></div></div>`}
+function bindFind(kind,draw){
+  const f=flt[kind],q=$('#fq'),w=$('#fw'),c=$('#fc');
+  q.oninput=()=>{f.q=q.value;draw()};w.onchange=()=>{f.when=w.value;draw()};if(c)c.onchange=()=>{f.cat=c.value;draw()};
+  q.onkeydown=e=>{if(e.key==='Escape'&&q.value){e.preventDefault();q.value='';f.q='';draw()}};
+  $('#fclr').onclick=()=>{f.q='';f.when='';if('cat' in f)f.cat='';q.value='';w.value='';if(c)c.value='';draw();q.focus()};
+  draw()}
+
 // ----- receipts -----
+function receiptItem(x){return `<div class="item" data-id="${x.id}">
+      ${(x.photos||[])[0]?`<img class="thumb" src="${x.photos[0]}">`:'<div class="thumb nophoto" title="No photo">'+I.receipt+'</div>'}
+      <div class="main"><div class="t">${esc(x.vendor)}</div><div class="s">${x.date} · ${esc(x.category)}${x.client?` · ${esc(x.client)}`:''}${x.billable?(x.invoiced?' · invoiced':' · billable'):''}${(x.photos||[]).length>1?` · ${x.photos.length} photos`:''}</div></div>
+      <div class="amt">${money(x.amount)}</div></div>`}
 function vReceipts(){
   upQueue=[];upTotal=0;
   const list=receipts.filter(x=>x.date.startsWith(year));
   const cats=[...settings().categories,...new Set(list.map(x=>x.category).filter(c=>c&&!settings().categories.includes(c)))]; // every category, plus any used on this year's receipts
+  const allCats=[...settings().categories,...new Set(receipts.map(x=>x.category).filter(c=>c&&!settings().categories.includes(c)))]; // for the search filter, which can look at every year
+  const ms=whenMonths(receipts);if(flt.r.when&&flt.r.when!=='all'&&!ms.includes(flt.r.when))flt.r.when=''; // picked month has nothing in the newly chosen year
+  if(flt.r.cat&&!allCats.includes(flt.r.cat))flt.r.cat='';
   $('#main').innerHTML=`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
     <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="add">+ Add receipt</button><button class="btn sec" id="upl">${I.dl.replace('M12 4v11M7 11l5 5 5-5M5 20h14','M12 16V5M7 9l5-5 5 5M5 20h14')}Upload receipts / invoices</button><button class="btn sec" id="xl">${I.export}Export to spreadsheet</button></div>${yearPicker()}</div>
     <input type="file" id="ufiles" accept="image/*,.heic,.heif,application/pdf" multiple class="hidden">
@@ -744,16 +781,19 @@ function vReceipts(){
     <input type="file" id="cfiles" accept="image/*,.heic,.heif,application/pdf" multiple class="hidden">
     ${cats.map((c,i)=>{const rs=list.filter(x=>x.category===c);return `<div class="catrow"><div><b>${esc(c)}</b><div class="muted">${rs.length} receipt${rs.length===1?'':'s'} · ${money(rs.reduce((s,x)=>s+Number(x.amount||0),0))}</div></div><button class="btn sec cupl" data-i="${i}">${I.dl.replace('M12 4v11M7 11l5 5 5-5M5 20h14','M12 16V5M7 9l5-5 5 5M5 20h14')}Upload</button></div>`}).join('')}
     <p class="muted" style="margin-bottom:0">Files uploaded here start in that category.</p></div>
-   <div class="card">${list.length?list.map(x=>`<div class="item" data-id="${x.id}">
-      ${(x.photos||[])[0]?`<img class="thumb" src="${x.photos[0]}">`:'<div class="thumb nophoto" title="No photo">'+I.receipt+'</div>'}
-      <div class="main"><div class="t">${esc(x.vendor)}</div><div class="s">${x.date} · ${esc(x.category)}${x.client?` · ${esc(x.client)}`:''}${x.billable?(x.invoiced?' · invoiced':' · billable'):''}${(x.photos||[]).length>1?` · ${x.photos.length} photos`:''}</div></div>
-      <div class="amt">${money(x.amount)}</div></div>`).join(''):'<p class="muted">No receipts for this year.</p>'}</div>`;
+   ${receipts.length?findBar('r','Search receipts','Vendor, note, client or amount',`<div><label for="fc">Category</label><select id="fc"><option value="">All categories</option>${allCats.map(c=>`<option ${c===flt.r.cat?'selected':''}>${esc(c)}</option>`).join('')}</select></div>`,flt.r.when,ms):''}
+   <div class="card" id="rlist"></div>`;
+  const draw=()=>{const f=flt.r,active=!!(f.q.trim()||f.cat||f.when);
+    const rs=receipts.filter(x=>inWhen(x,f.when)&&(!f.cat||x.category===f.cat)&&hits(f.q,[x.vendor,x.category,x.client,x.notes,Number(x.amount||0).toFixed(2),x.date]));
+    $('#rlist').innerHTML=rs.length?rs.map(receiptItem).join(''):`<p class="muted" style="margin:0">${active?'No receipts match your search.':'No receipts for this year.'}</p>`;
+    if($('#fsum')){$('#fsum').textContent=`${rs.length} receipt${rs.length===1?'':'s'} · ${money(rs.reduce((s,x)=>s+Number(x.amount||0),0))}${active?'':' in '+year}`;$('#fclr').hidden=!active}
+    document.querySelectorAll('#rlist .item').forEach(e=>e.onclick=()=>receiptForm(receipts.find(r=>r.id===e.dataset.id)))};
+  if($('#fq'))bindFind('r',draw);else draw();
   bindYear();$('#add').onclick=()=>receiptForm();
   $('#upl').onclick=()=>$('#ufiles').click();$('#xl').onclick=exportReceiptsXlsx;
   let pickCat='';document.querySelectorAll('.cupl').forEach(b=>b.onclick=()=>{pickCat=cats[b.dataset.i];$('#cfiles').click()});
   $('#cfiles').onchange=e=>{const fs=[...e.target.files].filter(f=>isPic(f)||f.type==='application/pdf'||/\.pdf$/i.test(f.name));e.target.value='';if(fs.length)startUploads(fs,pickCat)};
   $('#ufiles').onchange=e=>{const fs=[...e.target.files].filter(f=>isPic(f)||f.type==='application/pdf'||/\.pdf$/i.test(f.name));e.target.value='';if(fs.length)startUploads(fs)};
-  document.querySelectorAll('.item').forEach(e=>e.onclick=()=>receiptForm(receipts.find(r=>r.id===e.dataset.id)));
 }
 function receiptForm(r,opts={}){
   const isNew=!r;r=r||{id:uid(),date:today(),vendor:'',amount:'',category:opts.cat||settings().categories[0],notes:'',photos:[]};
@@ -828,18 +868,24 @@ function receiptForm(r,opts={}){
 let gps=null;
 function vMileage(){
   upQueue=[];upTotal=0;
-  const list=trips.filter(x=>x.date.startsWith(year));
+  const ms=whenMonths(trips);if(flt.t.when&&flt.t.when!=='all'&&!ms.includes(flt.t.when))flt.t.when='';
   $('#main').innerHTML=`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
     <div class="actions" style="margin:0"><button class="btn" id="add">+ Add trip</button><button class="btn sec" id="mupl">${I.dl.replace('M12 4v11M7 11l5 5 5-5M5 20h14','M12 16V5M7 9l5-5 5 5M5 20h14')}Upload route screenshots</button><button class="btn sec" id="mxl">${I.export}Export to spreadsheet</button><button class="btn sec" id="trk">${I.pin}GPS (screen on)</button><button class="btn sec" id="calb">${I.cal}Trips from calendar</button></div>${yearPicker()}</div>
     <input type="file" id="mfiles" accept="image/*,.heic,.heif" multiple class="hidden">
     <p class="muted" style="margin-bottom:0">Upload Google Maps route screenshots, new or from past trips. Each one becomes a trip with the miles and addresses read from it, opened for you to check, then saved. “Export to spreadsheet” saves every trip from every year as an Excel file.</p><p class="muted" id="mxmsg" aria-live="polite" style="margin-bottom:0"></p></div>
-   <div class="card">${list.length?list.map(x=>`<div class="item" data-id="${x.id}">${(x.photos||[])[0]?`<img class="thumb" src="${x.photos[0]}" alt="Route screenshot">`:'<div class="thumb">'+I.car+'</div>'}
+   ${trips.length?findBar('t','Search trips','Place, purpose, client or miles','',flt.t.when,ms):''}
+   <div class="card" id="tlist"></div>`;
+  const draw=()=>{const f=flt.t,active=!!(f.q.trim()||f.when);
+    const ts=trips.filter(x=>inWhen(x,f.when)&&hits(f.q,[x.from,x.to,x.purpose,x.client,x.notes,Number(x.miles||0).toFixed(1),x.date]));
+    $('#tlist').innerHTML=ts.length?ts.map(x=>`<div class="item" data-id="${x.id}">${(x.photos||[])[0]?`<img class="thumb" src="${x.photos[0]}" alt="Route screenshot">`:'<div class="thumb">'+I.car+'</div>'}
       <div class="main"><div class="t">${esc(x.from||'—')} → ${esc(x.to||'—')}</div><div class="s">${x.date} · ${esc(x.purpose)}${x.roundTrip?' · round trip':''}${x.client?` · ${esc(x.client)}`:''}${x.billable?(x.invoiced?' · invoiced':' · billable'):''}</div></div>
-      <div class="amt">${Number(x.miles).toFixed(1)} mi</div></div>`).join(''):'<p class="muted">No trips for this year.</p>'}</div>`;
+      <div class="amt">${Number(x.miles).toFixed(1)} mi</div></div>`).join(''):`<p class="muted" style="margin:0">${active?'No trips match your search.':'No trips for this year.'}</p>`;
+    if($('#fsum')){$('#fsum').textContent=`${ts.length} trip${ts.length===1?'':'s'} · ${ts.reduce((s,x)=>s+Number(x.miles||0),0).toLocaleString(undefined,{minimumFractionDigits:1,maximumFractionDigits:1})} mi${active?'':' in '+year}`;$('#fclr').hidden=!active}
+    document.querySelectorAll('#tlist .item').forEach(e=>e.onclick=()=>tripForm(trips.find(t=>t.id===e.dataset.id)))};
+  if($('#fq'))bindFind('t',draw);else draw();
   bindYear();$('#add').onclick=()=>tripForm();$('#trk').onclick=gpsView;$('#calb').onclick=calTrips;
   $('#mupl').onclick=()=>$('#mfiles').click();$('#mxl').onclick=exportMileageXlsx;
   $('#mfiles').onchange=e=>{const fs=[...e.target.files].filter(isPic);e.target.value='';if(fs.length)startUploads(fs,'','trip')};
-  document.querySelectorAll('.item').forEach(e=>e.onclick=()=>tripForm(trips.find(t=>t.id===e.dataset.id)));
 }
 function tripForm(t,prefillMiles,opts={}){
   const isNew=!t||!t.id;t=t&&t.id?t:{id:uid(),date:today(),from:'',to:'',purpose:'',odoStart:'',odoEnd:'',miles:prefillMiles??'',...(t||{})};
