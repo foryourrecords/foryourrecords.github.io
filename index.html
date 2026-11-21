@@ -22,7 +22,22 @@ header{position:sticky;top:0;z-index:5;display:flex;justify-content:space-betwee
 header h1{margin:0;font-size:16px;font-weight:600;display:flex;align-items:center;gap:10px;min-width:0;white-space:nowrap}
 header h1 .mark{width:28px;height:28px;border-radius:9px;background:var(--accent);color:var(--on-accent);display:flex;align-items:center;justify-content:center;flex:none}
 header .hr{display:flex;gap:8px;align-items:center;flex:none}
+header h1>span:last-child{min-width:0;overflow:hidden;text-overflow:ellipsis} /* on a narrow phone the title shortens with "…" instead of running under the buttons */
 #backbtn[hidden]{display:none}#backbtn{flex:none;color:var(--text)}
+/* Side panel (three-line menu) for the pages used less often: Tax and Bank */
+#scrim{position:fixed;inset:0;z-index:40;background:rgba(0,0,0,.5)}
+#scrim[hidden],#drawer[hidden]{display:none}
+#drawer{position:fixed;top:0;right:0;bottom:0;z-index:41;width:min(320px,86vw);background:var(--card);border-left:1px solid var(--line2);box-shadow:-12px 0 32px rgba(0,0,0,.35);padding:calc(14px + env(safe-area-inset-top,0px)) 16px calc(16px + env(safe-area-inset-bottom,0px));overflow:auto;animation:dslide .2s ease-out}
+@keyframes dslide{from{transform:translateX(24px);opacity:0}to{transform:none;opacity:1}}
+@media (prefers-reduced-motion:reduce){#drawer{animation:none}}
+#drawer .dhead{display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;font-size:16px}
+#drawer .dlabel{margin:14px 0 6px;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.06em}
+#drawer .ditem{width:100%;display:flex;align-items:center;gap:12px;padding:12px;margin-bottom:6px;border:1px solid var(--line2);border-radius:14px;background:none;color:var(--text);font:inherit;text-align:left;cursor:pointer}
+#drawer .ditem i{width:40px;height:40px;border-radius:12px;display:flex;align-items:center;justify-content:center;background:var(--tint);color:var(--accent);flex:none}
+#drawer .ditem span{display:flex;flex-direction:column;gap:2px;min-width:0}
+#drawer .ditem small{color:var(--muted);font-size:12.5px}
+#drawer .ditem.on{border-color:var(--accent)}
+body.locked #drawer,body.locked #scrim{display:none!important}
 /* Lock screen: nothing from your records is drawn until you sign in */
 #lock{position:fixed;inset:0;z-index:100;background:var(--bg);display:flex;align-items:center;justify-content:center;padding:24px;overflow:auto}
 #lock[hidden]{display:none}
@@ -150,14 +165,19 @@ td.r,th.r{text-align:right}
   <label class="lockstay"><input type="checkbox" id="lockstay"> Stay signed in on this device for 24 hours</label>
   <p class="muted" id="lockmsg" aria-live="polite"></p>
 </div></div>
-<header><h1><button id="backbtn" class="iconbtn" aria-label="Back" title="Back" hidden><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button><span class="mark" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="18" r="2"/><circle cx="18" cy="6" r="2"/><path d="M8 18h6.5a3.5 3.5 0 0 0 0-7h-5a3.5 3.5 0 0 1 0-7H16"/></svg></span><span>Expense &amp; Mileage<span class="full"> Tracker</span></span></h1><div class="hr"><button id="syncbtn" class="syncbtn">Sync</button><button id="hset" class="iconbtn" aria-label="Settings"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg></button></div></header>
+<header><h1><button id="backbtn" class="iconbtn" aria-label="Back" title="Back" hidden><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button><span class="mark" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="18" r="2"/><circle cx="18" cy="6" r="2"/><path d="M8 18h6.5a3.5 3.5 0 0 0 0-7h-5a3.5 3.5 0 0 1 0-7H16"/></svg></span><span>Expense &amp; Mileage<span class="full"> Tracker</span></span></h1><div class="hr"><button id="syncbtn" class="syncbtn">Sync</button><button id="hset" class="iconbtn" aria-label="Settings"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg></button><button id="menubtn" class="iconbtn" type="button" aria-label="Menu: Tax and Bank" aria-expanded="false" aria-controls="drawer"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6.5h16M4 12h16M4 17.5h16"/></svg></button></div></header>
 <nav id="nav" aria-label="Main">
   <button data-v="summary" class="on" aria-current="page"><i><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/></svg></i>Summary</button>
   <button data-v="receipts"><i><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3.5h12v17l-3-2-3 2-3-2-3 2z"/><path d="M9.5 8.5h5M9.5 12h5"/></svg></i>Receipts</button>
   <button data-v="mileage"><i><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="18" r="2"/><circle cx="18" cy="6" r="2"/><path d="M8 18h6.5a3.5 3.5 0 0 0 0-7h-5a3.5 3.5 0 0 1 0-7H16"/></svg></i>Mileage</button>
-  <button data-v="esttax"><i><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 19L19 5"/><circle cx="7.5" cy="7.5" r="2.5"/><circle cx="16.5" cy="16.5" r="2.5"/></svg></i>Tax</button>
-  <button data-v="bank"><i><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 9.5l9-5.5 9 5.5"/><path d="M5.5 10v8M10 10v8M14 10v8M18.5 10v8M3 20.5h18"/></svg></i>Bank</button>
 </nav>
+<div id="scrim" hidden></div>
+<aside id="drawer" hidden role="dialog" aria-modal="true" aria-label="More">
+  <div class="dhead"><b>More</b><button id="dclose" class="iconbtn" type="button" aria-label="Close menu"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button></div>
+  <p class="dlabel">Tax and banking</p>
+  <button class="ditem" type="button" data-dv="esttax"><i><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 19L19 5"/><circle cx="7.5" cy="7.5" r="2.5"/><circle cx="16.5" cy="16.5" r="2.5"/></svg></i><span><b>Tax</b><small>Estimate, year-end forms, documents</small></span></button>
+  <button class="ditem" type="button" data-dv="bank"><i><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 9.5l9-5.5 9 5.5"/><path d="M5.5 10v8M10 10v8M14 10v8M18.5 10v8M3 20.5h18"/></svg></i><span><b>Bank</b><small>Match a statement to your receipts</small></span></button>
+</aside>
 <main id="main"></main>
 <div id="report"></div>
 <div id="lightbox" onclick="this.style.display='none'"><img id="lbimg"></div>
@@ -441,9 +461,12 @@ new MutationObserver(syncBack).observe($('#main'),{childList:true}); // forms re
 function render(){
   if(lastView!==null&&view!==lastView){navStack.push(lastView);if(navStack.length>30)navStack.shift()}lastView=view;
   inForm=false;updateStatus();
-  const tab=TAXV.includes(view)?'esttax':['receipts','mileage','bank','settings'].includes(view)?view:'summary';
+  const inMore=TAXV.includes(view)||view==='bank'; // Tax and Bank live in the side panel, not the bottom bar
+  const tab=inMore?'':['receipts','mileage','settings'].includes(view)?view:'summary';
   document.querySelectorAll('#nav button').forEach(b=>{const on=b.dataset.v===tab;b.classList.toggle('on',on);if(on)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current')});
   $('#hset').classList.toggle('on',view==='settings');
+  $('#menubtn').classList.toggle('on',inMore);
+  document.querySelectorAll('#drawer .ditem').forEach(b=>{const on=inMore&&((b.dataset.dv==='bank')===(view==='bank'));b.classList.toggle('on',on);if(on)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current')});
   ({summary:vSummary,receipts:vReceipts,mileage:vMileage,qbexport:vQbExport,audit:vAudit,homeoffice:vHomeOffice,esttax:vEstTax,bank:vBank,taxforms:vTaxForms,taxdocs:vTaxDocs,settings:vSettings})[view]();
   if(TAXV.includes(view)){
     $('#main').insertAdjacentHTML('afterbegin',`<div class="seg">${[['esttax','Estimate'],['taxforms','Year-end forms'],['taxdocs','Documents']].map(([v,l])=>`<button data-sv="${v}" class="${v===view?'on':''}"${v===view?' aria-current="page"':''}>${l}</button>`).join('')}</div>`);
@@ -453,6 +476,14 @@ function render(){
 const TAXV=['esttax','taxforms','taxdocs'];
 document.getElementById('nav').onclick=e=>{const b=e.target.closest('button[data-v]');if(b){view=b.dataset.v;render();window.scrollTo(0,0)}};
 document.getElementById('hset').onclick=()=>{view='settings';render();window.scrollTo(0,0)};
+// Side panel (three-line menu): the pages you use once or twice a month. Closes on a choice, the dark area, the X, or Escape.
+const drawer=$('#drawer'),scrim=$('#scrim'),menubtn=$('#menubtn');
+function openMenu(){drawer.hidden=false;scrim.hidden=false;menubtn.setAttribute('aria-expanded','true');drawer.querySelector('.ditem').focus()}
+function closeMenu(focusBtn){drawer.hidden=true;scrim.hidden=true;menubtn.setAttribute('aria-expanded','false');if(focusBtn)menubtn.focus()}
+menubtn.onclick=()=>drawer.hidden?openMenu():closeMenu(true);
+$('#dclose').onclick=()=>closeMenu(true);scrim.onclick=()=>closeMenu();
+drawer.onclick=e=>{const b=e.target.closest('[data-dv]');if(b){closeMenu();view=b.dataset.dv;render();window.scrollTo(0,0)}};
+document.addEventListener('keydown',e=>{if(e.key==='Escape'&&!drawer.hidden)closeMenu(true)});
 
 function yearPicker(){return `<select id="yr" style="width:auto">${years().map(y=>`<option ${y===year?'selected':''}>${y}</option>`).join('')}</select>`}
 function bindYear(){const y=$('#yr');if(y)y.onchange=()=>{year=y.value;render()}}
@@ -2368,7 +2399,7 @@ const sessionOk=()=>{try{const s=JSON.parse(localStorage.getItem(SESS_KEY)||'nul
 function startSession(stay){try{if(stay)localStorage.setItem(SESS_KEY,JSON.stringify({email:EMAIL,until:Date.now()+STAY_MS}));else localStorage.removeItem(SESS_KEY);localStorage.setItem(STAY_KEY,stay?'1':'0')}catch(e){}}
 function showLock(msg){locked=true;document.body.classList.add('locked');$('#lock').hidden=false;try{$('#lockstay').checked=localStorage.getItem(STAY_KEY)==='1'}catch(e){}$('#lockmsg').textContent=msg||''}
 function unlock(){locked=false;document.body.classList.remove('locked');$('#lock').hidden=true;render();window.scrollTo(0,0)}
-function lockNow(){try{localStorage.removeItem(SESS_KEY)}catch(e){}try{if(tok)google.accounts.oauth2.revoke(tok)}catch(e){}tok=null;tokExp=0;$('#main').innerHTML='';showLock('Signed out. Sign in with Google to open your records.')}
+function lockNow(){closeMenu();try{localStorage.removeItem(SESS_KEY)}catch(e){}try{if(tok)google.accounts.oauth2.revoke(tok)}catch(e){}tok=null;tokExp=0;$('#main').innerHTML='';showLock('Signed out. Sign in with Google to open your records.')}
 async function lockSignIn(interactive){
   const btn=$('#lockgo'),msg=$('#lockmsg');
   if(interactive){btn.disabled=true;msg.textContent='Signing in…'}
