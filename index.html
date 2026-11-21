@@ -8,7 +8,9 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&display=swap">
-<title>Expense & Mileage Tracker</title>
+<title>For Your Records</title>
+<meta name="apple-mobile-web-app-title" content="Records">
+<meta name="application-name" content="For Your Records">
 <style>
 :root{--bg:#0A0F0E;--card:#121A19;--card2:#182322;--field:#0D1413;--text:#ECF3F1;--muted:#8FA4A0;--line:#1F2D2B;--line2:#2A3A37;--accent:#2FD6BC;--accent2:#5EE6CF;--on-accent:#04201B;--danger:#FF7A6B;--warn:#FFB454;--inv:#ECF3F1;--on-inv:#0A0F0E;--bar:#0D1413;--track:#1C2826;--tint:rgba(47,214,188,.16);color-scheme:dark}
 @media (prefers-color-scheme:light){:root{--bg:#F3F6F5;--card:#FFFFFF;--card2:#EEF3F2;--field:#F8FBFA;--text:#0E1716;--muted:#566966;--line:#E1E8E6;--line2:#CFDAD7;--accent:#0B7A6A;--accent2:#086356;--on-accent:#FFFFFF;--danger:#B42318;--warn:#A15C07;--inv:#0E1716;--on-inv:#FFFFFF;--bar:#FFFFFF;--track:#E3ECEA;--tint:rgba(11,122,106,.12);color-scheme:light}}
@@ -158,18 +160,24 @@ td.r,th.r{text-align:right}
 #report h2{margin:16px 0 6px}
 /* light mode keeps the mint highlights of the dark look */
 @media (prefers-color-scheme:light){button.btn:not(.sec):not(.del),.stat.hero,header h1 .mark,#lock .mark{background:#2FD6BC;color:#04201B}.stat.hero b,.stat.hero span{color:#04201B}.cbar .track span{background:#2FD6BC}}
+.locktag{margin:4px 0 0;color:var(--muted);font-size:14px}
+#lock .mark{width:76px;height:76px;border-radius:21px}
+#lock .mark svg{width:46px;height:46px}
+#lock h1{font-size:28px;letter-spacing:-.035em}
+@media (max-width:479px){.syncbtn{width:34px;padding:0;justify-content:center;gap:0;font-size:0}.syncbtn::before{width:7px;height:7px}}
 </style>
 </head>
 <body class="locked">
 <div id="lock" role="dialog" aria-modal="true" aria-labelledby="lockt"><div class="lockbox">
-  <div class="mark" aria-hidden="true"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="9" rx="2.5"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg></div>
-  <h1 id="lockt">Expense &amp; Mileage Tracker</h1>
+  <div class="mark" aria-hidden="true"><svg width="46" height="46" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M8 6V4.5A1.5 1.5 0 0 1 9.5 3H17l3.5 3.5v10A1.5 1.5 0 0 1 19 18h-2.5"/><path d="M4 7.5A1.5 1.5 0 0 1 5.5 6H13l3.5 3.5v10A1.5 1.5 0 0 1 15 21H5.5A1.5 1.5 0 0 1 4 19.5z"/><path d="M13 6v3.5h3.5"/><path d="M7.5 15l2 2 3.5-4"/></svg></div>
+  <h1 id="lockt">For Your Records</h1>
+  <p class="locktag">Receipts, miles, income and taxes. Kept and ready.</p>
   <p class="lockp">Your records are locked. Sign in with Google to open them.</p>
   <button class="btn" id="lockgo" type="button">Sign in with Google</button>
   <label class="lockstay"><input type="checkbox" id="lockstay"> Stay signed in on this device for 24 hours</label>
   <p class="muted" id="lockmsg" aria-live="polite"></p>
 </div></div>
-<header><h1><button id="backbtn" class="iconbtn" aria-label="Back" title="Back" hidden><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button><span class="mark" aria-hidden="true"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="6" cy="18" r="2"/><circle cx="18" cy="6" r="2"/><path d="M8 18h6.5a3.5 3.5 0 0 0 0-7h-5a3.5 3.5 0 0 1 0-7H16"/></svg></span><span>Expense &amp; Mileage<span class="full"> Tracker</span></span></h1><div class="hr"><button id="syncbtn" class="syncbtn">Sync</button><button id="hset" class="iconbtn" aria-label="Settings"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg></button><button id="menubtn" class="iconbtn" type="button" aria-label="Menu: Tax and Bank" aria-expanded="false" aria-controls="drawer"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6.5h16M4 12h16M4 17.5h16"/></svg></button></div></header>
+<header><h1><button id="backbtn" class="iconbtn" aria-label="Back" title="Back" hidden><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button><span class="mark" aria-hidden="true"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M8 6V4.5A1.5 1.5 0 0 1 9.5 3H17l3.5 3.5v10A1.5 1.5 0 0 1 19 18h-2.5"/><path d="M4 7.5A1.5 1.5 0 0 1 5.5 6H13l3.5 3.5v10A1.5 1.5 0 0 1 15 21H5.5A1.5 1.5 0 0 1 4 19.5z"/><path d="M7.5 15l2 2 3.5-4"/></svg></span><span>For Your Records</span></h1><div class="hr"><button id="syncbtn" class="syncbtn">Sync</button><button id="hset" class="iconbtn" aria-label="Settings"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg></button><button id="menubtn" class="iconbtn" type="button" aria-label="Menu: Tax and Bank" aria-expanded="false" aria-controls="drawer"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6.5h16M4 12h16M4 17.5h16"/></svg></button></div></header>
 <nav id="nav" aria-label="Main">
   <button data-v="summary" class="on" aria-current="page"><i><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/></svg></i>Summary</button>
   <button data-v="receipts"><i><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3.5h12v17l-3-2-3 2-3-2-3 2z"/><path d="M9.5 8.5h5M9.5 12h5"/></svg></i>Receipts</button>
