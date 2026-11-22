@@ -18,10 +18,12 @@
 
 <h2>Google permissions</h2>
 <p><b>Google Drive (<code>drive.file</code>):</b> lets the App create and read only the files it creates itself in your Drive. It cannot see any other files in your Drive. Your data moves directly between your browser and Google.</p>
+<p><b>Team reports (optional):</b> if you use the Team screen, a staff member's report is a file the App creates in their own Google Drive and shares, through Google Drive's own sharing, with the Gmail address they enter for their employer. The employer opens it with Google's file picker (Google Picker, a Google service), which gives the App access to only the files they choose. The employer's approve, reject and paid decisions are written back into that same file. The report holds what the staff member chose to send: receipts and trips with their details and photos, and their name and Google email address. The developer does not receive these reports.</p>
 <p><b>Google Calendar, read only (<code>calendar.readonly</code>), optional:</b> asked for only if you use "Trips from calendar". The App reads your calendar events on your device to suggest business trips. It never changes your calendar. Event details stay on your device, except an event's location when you tap an Estimate button (see Mileage estimates below).</p>
 
 <h2>Other services the App uses</h2>
 <p><b>Mileage estimates and addresses:</b> when you tap an Estimate button or "Add city, state and ZIP", the addresses involved are sent to OpenStreetMap services (nominatim.openstreetmap.org and router.project-osrm.org) to find the place and the driving distance. Nothing else is sent with them.</p>
+<p><b>Google file picker:</b> on the Team screen the App loads Google's Picker script from apis.google.com. It is used only when an employer chooses to open a staff report.</p>
 <p><b>Receipt reading:</b> receipts are read on your device. The reading software and other parts of the App are downloaded from public content networks (such as cdnjs.cloudflare.com and cdn.jsdelivr.net), and fonts from Google Fonts. Your photos are not sent to those services.</p>
 <p><b>Location:</b> if you use the GPS trip tracker, your browser asks for permission to use your location. Location is used only on your device to measure the trip. Only the resulting miles are saved.</p>
 
