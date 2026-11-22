@@ -59,6 +59,8 @@ body.locked #drawer,body.locked #scrim{display:none!important}
 #lock .btn{width:100%;justify-content:center}
 #lock .lockstay{display:flex;gap:8px;align-items:center;color:var(--text);font-size:14px;text-align:left}
 #lock .lockstay input{width:auto}
+#lock .lockalt{background:none;border:0;color:var(--accent);font:inherit;font-size:14px;font-weight:600;cursor:pointer;padding:6px}
+.beta{display:inline-block;margin-left:6px;padding:1px 7px;border:1px solid var(--line2);border-radius:999px;font-size:11px;font-weight:600;color:var(--muted);vertical-align:2px;letter-spacing:0}
 body.locked header,body.locked nav,body.locked main,body.locked #report{display:none!important}
 @media (max-width:479px){header h1 .full{display:none}}
 .syncbtn{display:flex;align-items:center;gap:7px;height:34px;padding:0 12px;border:1px solid var(--line2);background:var(--card);color:var(--muted);border-radius:999px;font:inherit;font-size:12.5px;cursor:pointer;white-space:nowrap}
@@ -196,12 +198,13 @@ td.r,th.r{text-align:right}
   <div class="mark" aria-hidden="true"><svg width="70" height="70" viewBox="4 6 90 90" aria-hidden="true"><ellipse cx="50" cy="90.5" rx="31" ry="4" fill="#04201B" opacity=".28"/><polygon points="24,20 64,20 78,12 38,12" fill="#A6B1AF"/><polygon points="64,20 78,12 78,80 64,88" fill="#46514F"/><rect x="24" y="20" width="40" height="68" fill="#76827F"/><rect x="27" y="45" width="34" height="19" rx="1.5" fill="#86928F" stroke="#636F6C" stroke-width="1"/><rect x="40" y="52" width="8" height="3" rx="1.5" fill="#EEF3F2"/><rect x="27" y="67" width="34" height="19" rx="1.5" fill="#86928F" stroke="#636F6C" stroke-width="1"/><rect x="40" y="74" width="8" height="3" rx="1.5" fill="#EEF3F2"/><rect x="27" y="23" width="34" height="19" rx="1" fill="#1A2322"/><polygon points="20,27 54,27 61,23 27,23" fill="#2A3432"/><rect x="29" y="18.5" width="10" height="8" rx="1" fill="#FFFFFF"/><rect x="41.5" y="20.5" width="8.5" height="6" rx="1" fill="#BFEFE6"/><polygon points="54,27 61,23 61,42 54,46" fill="#5F6B68"/><rect x="20" y="27" width="34" height="19" rx="1.5" fill="#86928F" stroke="#636F6C" stroke-width="1"/><rect x="33" y="34" width="8" height="3" rx="1.5" fill="#EEF3F2"/></svg></div>
   <h1 id="lockt">For Your Records</h1>
   <p class="locktag">Receipts, miles, income and taxes. Kept and ready.</p>
-  <p class="lockp">Your records are locked. Sign in with Google to open them.</p>
+  <p class="lockp" id="lockp">Your records are locked. Sign in with Google to open them.</p>
   <button class="btn" id="lockgo" type="button">Sign in with Google</button>
   <label class="lockstay"><input type="checkbox" id="lockstay"> Stay signed in on this device for 24 hours</label>
+  <button type="button" class="lockalt" id="lockalt" hidden>Use a different Google account</button>
   <p class="muted" id="lockmsg" aria-live="polite"></p>
 </div></div>
-<header><h1><button id="backbtn" class="iconbtn" aria-label="Back" title="Back" hidden><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button><span class="mark" aria-hidden="true"><svg width="27" height="27" viewBox="4 6 90 90" aria-hidden="true"><ellipse cx="50" cy="90.5" rx="31" ry="4" fill="#04201B" opacity=".28"/><polygon points="24,20 64,20 78,12 38,12" fill="#A6B1AF"/><polygon points="64,20 78,12 78,80 64,88" fill="#46514F"/><rect x="24" y="20" width="40" height="68" fill="#76827F"/><rect x="27" y="45" width="34" height="19" rx="1.5" fill="#86928F" stroke="#636F6C" stroke-width="1"/><rect x="40" y="52" width="8" height="3" rx="1.5" fill="#EEF3F2"/><rect x="27" y="67" width="34" height="19" rx="1.5" fill="#86928F" stroke="#636F6C" stroke-width="1"/><rect x="40" y="74" width="8" height="3" rx="1.5" fill="#EEF3F2"/><rect x="27" y="23" width="34" height="19" rx="1" fill="#1A2322"/><polygon points="20,27 54,27 61,23 27,23" fill="#2A3432"/><rect x="29" y="18.5" width="10" height="8" rx="1" fill="#FFFFFF"/><rect x="41.5" y="20.5" width="8.5" height="6" rx="1" fill="#BFEFE6"/><polygon points="54,27 61,23 61,42 54,46" fill="#5F6B68"/><rect x="20" y="27" width="34" height="19" rx="1.5" fill="#86928F" stroke="#636F6C" stroke-width="1"/><rect x="33" y="34" width="8" height="3" rx="1.5" fill="#EEF3F2"/></svg></span><span>For Your Records</span></h1><div class="hr"><button id="syncbtn" class="syncbtn">Sync</button><button id="hset" class="iconbtn" aria-label="Settings"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg></button><button id="menubtn" class="iconbtn" type="button" aria-label="Menu: Tax and Bank" aria-expanded="false" aria-controls="drawer"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6.5h16M4 12h16M4 17.5h16"/></svg></button></div></header>
+<header><h1><button id="backbtn" class="iconbtn" aria-label="Back" title="Back" hidden><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5l-7 7 7 7"/></svg></button><span class="mark" aria-hidden="true"><svg width="27" height="27" viewBox="4 6 90 90" aria-hidden="true"><ellipse cx="50" cy="90.5" rx="31" ry="4" fill="#04201B" opacity=".28"/><polygon points="24,20 64,20 78,12 38,12" fill="#A6B1AF"/><polygon points="64,20 78,12 78,80 64,88" fill="#46514F"/><rect x="24" y="20" width="40" height="68" fill="#76827F"/><rect x="27" y="45" width="34" height="19" rx="1.5" fill="#86928F" stroke="#636F6C" stroke-width="1"/><rect x="40" y="52" width="8" height="3" rx="1.5" fill="#EEF3F2"/><rect x="27" y="67" width="34" height="19" rx="1.5" fill="#86928F" stroke="#636F6C" stroke-width="1"/><rect x="40" y="74" width="8" height="3" rx="1.5" fill="#EEF3F2"/><rect x="27" y="23" width="34" height="19" rx="1" fill="#1A2322"/><polygon points="20,27 54,27 61,23 27,23" fill="#2A3432"/><rect x="29" y="18.5" width="10" height="8" rx="1" fill="#FFFFFF"/><rect x="41.5" y="20.5" width="8.5" height="6" rx="1" fill="#BFEFE6"/><polygon points="54,27 61,23 61,42 54,46" fill="#5F6B68"/><rect x="20" y="27" width="34" height="19" rx="1.5" fill="#86928F" stroke="#636F6C" stroke-width="1"/><rect x="33" y="34" width="8" height="3" rx="1.5" fill="#EEF3F2"/></svg></span><span>For Your Records<span class="beta">Beta</span></span></h1><div class="hr"><button id="syncbtn" class="syncbtn">Sync</button><button id="hset" class="iconbtn" aria-label="Settings"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8"/><circle cx="16" cy="7" r="2"/><circle cx="10" cy="17" r="2"/></svg></button><button id="menubtn" class="iconbtn" type="button" aria-label="Menu: Tax and Bank" aria-expanded="false" aria-controls="drawer"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 6.5h16M4 12h16M4 17.5h16"/></svg></button></div></header>
 <nav id="nav" aria-label="Main">
   <button data-v="summary" class="on" aria-current="page"><i><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="2"/><rect x="13.5" y="3.5" width="7" height="7" rx="2"/><rect x="3.5" y="13.5" width="7" height="7" rx="2"/><rect x="13.5" y="13.5" width="7" height="7" rx="2"/></svg></i>Summary</button>
   <button data-v="receipts"><i><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 3.5h12v17l-3-2-3 2-3-2-3 2z"/><path d="M9.5 8.5h5M9.5 12h5"/></svg></i>Receipts</button>
@@ -213,6 +216,8 @@ td.r,th.r{text-align:right}
   <p class="dlabel">Tax and banking</p>
   <button class="ditem" type="button" data-dv="esttax"><i><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 19L19 5"/><circle cx="7.5" cy="7.5" r="2.5"/><circle cx="16.5" cy="16.5" r="2.5"/></svg></i><span><b>Tax</b><small>Estimate, year-end forms, documents</small></span></button>
   <button class="ditem" type="button" data-dv="bank"><i><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 9.5l9-5.5 9 5.5"/><path d="M5.5 10v8M10 10v8M14 10v8M18.5 10v8M3 20.5h18"/></svg></i><span><b>Bank</b><small>Match a statement to your receipts</small></span></button>
+  <p class="dlabel">Beta</p>
+  <button class="ditem" type="button" id="fbbtn"><i><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5.5h16v11H9l-5 4z"/><path d="M8 9.5h8M8 12.5h5"/></svg></i><span><b>Send feedback</b><small>Tell us what to fix or add</small></span></button>
 </aside>
 <main id="main"></main>
 <div id="report"></div>
@@ -1904,12 +1909,15 @@ function vSettings(){
   const s=settings();
   const g=GS();
   $('#main').innerHTML=`<div class="card"><h3 style="margin-top:0">Google Drive sync</h3>
-   <p class="muted">Saves every receipt, photo and trip to a “Receipt &amp; Mileage Tracker” folder in the Google Drive of <b>${EMAIL}</b>. Syncs automatically after each change and when you open the app, so your phone and computer stay matched.</p>
-   <label>Google OAuth client ID (see setup steps)</label><input id="cid" value="${esc(g.cid||'')}" placeholder="1234567890-abc….apps.googleusercontent.com" autocapitalize="off" autocorrect="off">
+   <p class="muted">Signed in as <b>${esc(EMAIL||'nobody yet')}</b>. Every receipt, photo and trip is saved to a folder in that account's own Google Drive, after each change and when you open the app, so your phone and computer stay matched. Only you can see it.</p>
+   <details><summary class="muted" style="cursor:pointer">Advanced</summary><label>Google OAuth client ID</label><input id="cid" value="${esc(g.cid||'')}" placeholder="1234567890-abc….apps.googleusercontent.com" autocapitalize="off" autocorrect="off"></details>
    <div class="actions"><button class="btn" id="gc">${g.on?'Sync now':'Connect &amp; sync'}</button><button class="btn del" id="gd">Disconnect</button></div>
    <p class="muted" id="gstat"></p>
    <div class="actions" style="margin-top:0"><button class="btn sec" id="lockbtn">Sign out and lock</button></div>
-   <p class="muted" style="margin-bottom:0">The app asks you to sign in with Google every time you open it, unless you chose to stay signed in for 24 hours. “Sign out and lock” ends that and locks the screen now.</p></div>
+   <p class="muted" style="margin-bottom:0">The app asks you to sign in with Google every time you open it, unless you chose to stay signed in for 24 hours. “Sign out and lock” ends that and locks the screen now. To use a different Google account, sign out, then choose “Use a different Google account”.</p></div>
+  <div class="card"><h3 style="margin-top:0">Beta feedback</h3>
+   <p class="muted">For Your Records is in beta. Tell us what's confusing, broken or missing at <b>foryourrecordsstaff@gmail.com</b>.</p>
+   <div class="actions" style="margin-top:0"><button class="btn sec" id="fbset">Email feedback</button></div></div>
   <div class="card"><h3 style="margin-top:0">Settings</h3>
    <p class="muted">Work type: <b>${esc((PRESETS.find(p=>p.id===s.profession)||{}).name||'not set')}</b> <button class="btn sec" id="chprof" style="padding:4px 10px;font-size:13px;margin-left:6px">${s.profession?'Change':'Set up'}</button></p>
    <label style="display:flex;gap:8px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" id="rmode" style="width:auto" ${s.rateMode!=='custom'?'checked':''}> Use the IRS standard rate for each trip's date (recommended)</label>
@@ -1931,7 +1939,7 @@ function vSettings(){
    <input type="file" id="rf" accept=".json,application/json" class="hidden"></div>`;
   updateStatus();$('#chprof').onclick=()=>onboardView(true);
   $('#gc').onclick=()=>{const c=$('#cid').value.trim();if(!c){alert('Paste your Google client ID first.');return}setG({cid:c});syncNow(true)};
-  $('#lockbtn').onclick=lockNow;
+  $('#lockbtn').onclick=lockNow;$('#fbset').onclick=sendFeedback;
   $('#gd').onclick=()=>{try{if(tok)google.accounts.oauth2.revoke(tok)}catch(e){}tok=null;tokExp=0;syncErr='';setG({on:0});vSettings()};
   $('#ss').onclick=()=>{const r=parseFloat($('#rate').value),c=$('#cats').value.split('\n').map(x=>x.trim()).filter(Boolean);
     if(isNaN(r)||!c.length){alert('Enter a valid rate and at least one category.');return}saveSettings({...settings(),rate:r,rateMode:$('#rmode').checked?'irs':'custom',categories:c,autoscan:$('#autoscan').checked,purposes:$('#plist').value.split('\n').map(x=>x.trim()).filter(Boolean),clients:$('#clist').value.split('\n').map(x=>x.trim()).filter(Boolean),bizName:$('#bizn').value.trim(),bizContact:$('#bizc').value.trim(),clientRules:$('#crules').value.trim()});alert('Saved.')};
@@ -1948,7 +1956,14 @@ function vSettings(){
 }
 
 // ---------- Google Drive sync ----------
-const EMAIL='roanoketechconsultants@gmail.com',API='https://www.googleapis.com/drive/v3',UP='https://www.googleapis.com/upload/drive/v3';
+// Accounts: anyone can sign in with their own Google account, and their records save to a folder in their own Google Drive.
+// This browser holds one person's records at a time. Signing in with a different account asks first, makes sure nothing is
+// waiting to be saved, then clears this device's copy (it stays in the first person's Drive) and loads the new person's records.
+const LEGACY_EMAIL='roanoketechconsultants@gmail.com'; // the first user: records on a device from before accounts existed are theirs
+const ACCT_KEY='et-acct';
+let EMAIL=(()=>{try{return localStorage.getItem(ACCT_KEY)||''}catch(e){return ''}})();
+function setAcct(e){EMAIL=e||'';try{if(EMAIL)localStorage.setItem(ACCT_KEY,EMAIL);else localStorage.removeItem(ACCT_KEY)}catch(x){}}
+const API='https://www.googleapis.com/drive/v3',UP='https://www.googleapis.com/upload/drive/v3';
 const DEFAULT_CID='535782394451-5h50p63mpfghgj05vp0ncmt3bt1ug1bf.apps.googleusercontent.com';
 const GS=()=>{try{return {cid:DEFAULT_CID,...JSON.parse(localStorage.getItem('et-g')||'{}')}}catch(e){return {cid:DEFAULT_CID}}};
 const setG=o=>localStorage.setItem('et-g',JSON.stringify({...GS(),...o}));
@@ -1960,28 +1975,40 @@ function statusText(){const g=GS();if(!g.cid)return 'Set up sync';if(!g.on)retur
 function updateStatus(){const b=$('#syncbtn');if(b){b.textContent=statusText();const g=GS();b.dataset.s=!g.cid||!g.on?'off':syncing?'busy':syncErr?'err':'ok'}const s=$('#gstat');if(s)s.textContent=syncErr||statusText();}
 $('#syncbtn').onclick=()=>{if(!GS().cid){view='settings';render();return}syncNow(true)};
 
-function getToken(interactive){return new Promise((res,rej)=>{
+function getToken(interactive,pick){return new Promise((res,rej)=>{
   if(tok&&Date.now()<tokExp-60000)return res(tok);
   const cid=GS().cid;if(!cid)return rej(new Error('Enter your Google client ID in Settings first.'));
   if(!window.google?.accounts?.oauth2)return rej(new Error('Google sign-in did not load. Check your internet connection.'));
-  const c=google.accounts.oauth2.initTokenClient({client_id:cid,scope:'https://www.googleapis.com/auth/drive.file',hint:EMAIL,
+  const c=google.accounts.oauth2.initTokenClient({client_id:cid,scope:'https://www.googleapis.com/auth/drive.file',hint:pick?undefined:(EMAIL||undefined),
     callback:r=>{if(r.error)return rej(new Error(r.error_description||r.error));tok=r.access_token;tokExp=Date.now()+r.expires_in*1000;res(tok)},
     error_callback:e=>rej(new Error(e.type||'sign-in cancelled'))});
-  c.requestAccessToken({prompt:interactive?'':'none'});
+  c.requestAccessToken({prompt:interactive?(pick?'select_account':''):'none'});
 });}
 async function api(url,opt={}){
   const r=await fetch(url,{...opt,headers:{...(opt.headers||{}),Authorization:'Bearer '+tok}});
   if(!r.ok){throw new Error('Drive error '+r.status+': '+(await r.text()).slice(0,160))}return r;}
-async function checkAccount(){
-  const j=await (await api(`${API}/about?fields=user(emailAddress)`)).json(),e=(j.user?.emailAddress||'').toLowerCase();
-  if(e!==EMAIL){try{google.accounts.oauth2.revoke(tok)}catch(x){}tok=null;tokExp=0;setG({on:0});throw new Error(`You signed in as ${e}. This app saves to ${EMAIL} — tap Connect and pick that account.`)}}
+async function whoAmI(){const j=await (await api(`${API}/about?fields=user(emailAddress)`)).json();return (j.user?.emailAddress||'').toLowerCase()}
+function dropToken(){try{if(tok)google.accounts.oauth2.revoke(tok)}catch(x){}tok=null;tokExp=0}
+// Every sync checks that Google gave us the account whose records are on this device, so one person's records never go to another's Drive.
+async function checkAccount(){const e=await whoAmI();
+  if(!EMAIL){setAcct(e);return}
+  if(e!==EMAIL){dropToken();throw new Error(`You signed in as ${e}, but this device holds the records of ${EMAIL}. To switch, use “Sign out and lock” in Settings, then “Use a different Google account”.`)}}
+async function unsyncedCount(){let n=0;try{n=JSON.parse(localStorage.getItem('et-del')||'[]').length}catch(e){}
+  for(const st of ['receipts','trips','taxdocs','income'])for(const r of await all(st))if(!r._s||r.updated>r._s)n++;return n}
+// Removes this device's copy of the current person's records and personal settings (their Google Drive copy is untouched).
+async function clearDevice(){
+  for(const st of ['receipts','trips','taxdocs','income'])await req(tx(st,'readwrite').clear());
+  for(const k of ['et-settings','et-del','et-onb','et-checklist-hide','et-remind-hide','et-cal-skip','et-cals','et-dom','et-geo','et-session'])try{localStorage.removeItem(k)}catch(e){}
+  try{localStorage.setItem('et-g',JSON.stringify({cid:GS().cid}))}catch(e){}
+  setAcct('');await load()}
 async function ensureFolder(){
   let id=GS().folder;
   if(id){try{const j=await (await api(`${API}/files/${id}?fields=id,trashed`)).json();if(!j.trashed)return id}catch(e){}}
-  const q=encodeURIComponent("mimeType='application/vnd.google-apps.folder' and name='Receipt & Mileage Tracker' and trashed=false");
-  const j=await (await api(`${API}/files?q=${q}&fields=files(id)`)).json();
-  if(j.files[0])id=j.files[0].id;
-  else id=(await (await api(`${API}/files?fields=id`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'Receipt & Mileage Tracker',mimeType:'application/vnd.google-apps.folder'})})).json()).id;
+  id='';
+  for(const name of ['For Your Records','Receipt & Mileage Tracker']){ // the second is the folder name before the app was renamed
+    const q=encodeURIComponent(`mimeType='application/vnd.google-apps.folder' and name='${name}' and trashed=false`);
+    const j=await (await api(`${API}/files?q=${q}&fields=files(id)`)).json();if(j.files[0]){id=j.files[0].id;break}}
+  if(!id)id=(await (await api(`${API}/files?fields=id`,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:'For Your Records',mimeType:'application/vnd.google-apps.folder'})})).json()).id;
   setG({folder:id});return id;}
 async function listAll(folder){let out=[],pt='';
   do{const q=encodeURIComponent(`'${folder}' in parents and trashed=false`);
@@ -2557,14 +2584,24 @@ const whenGoogle=(ms=10000)=>new Promise(res=>{const t0=Date.now();(function w()
 const SESS_KEY='et-session',STAY_KEY='et-stay',STAY_MS=24*3600*1000;
 const sessionOk=()=>{try{const s=JSON.parse(localStorage.getItem(SESS_KEY)||'null');return !!s&&s.email===EMAIL&&Number(s.until)>Date.now()}catch(e){return false}};
 function startSession(stay){try{if(stay)localStorage.setItem(SESS_KEY,JSON.stringify({email:EMAIL,until:Date.now()+STAY_MS}));else localStorage.removeItem(SESS_KEY);localStorage.setItem(STAY_KEY,stay?'1':'0')}catch(e){}}
-function showLock(msg){locked=true;document.body.classList.add('locked');$('#lock').hidden=false;try{$('#lockstay').checked=localStorage.getItem(STAY_KEY)==='1'}catch(e){}$('#lockmsg').textContent=msg||''}
+function showLock(msg){locked=true;document.body.classList.add('locked');$('#lock').hidden=false;try{$('#lockstay').checked=localStorage.getItem(STAY_KEY)==='1'}catch(e){}$('#lockmsg').textContent=msg||'';
+  $('#lockp').textContent=EMAIL?'Your records are locked. Sign in with Google to open them.':'Sign in with Google to get started. Your records are saved in your own Google Drive, where only you can see them.';
+  $('#lockalt').hidden=!EMAIL}
 function unlock(){locked=false;document.body.classList.remove('locked');$('#lock').hidden=true;render();window.scrollTo(0,0)}
 function lockNow(){closeMenu();try{localStorage.removeItem(SESS_KEY)}catch(e){}try{if(tok)google.accounts.oauth2.revoke(tok)}catch(e){}tok=null;tokExp=0;$('#main').innerHTML='';showLock('Signed out. Sign in with Google to open your records.')}
-async function lockSignIn(interactive){
+async function lockSignIn(interactive,pick){
   const btn=$('#lockgo'),msg=$('#lockmsg');
   if(interactive){btn.disabled=true;msg.textContent='Signing in…'}
   try{
-    await getToken(interactive);await checkAccount();setG({on:1});
+    await getToken(interactive,pick);const e=await whoAmI();
+    if(EMAIL&&e!==EMAIL){ // a different person than the one whose records are on this device
+      if(!interactive){dropToken();throw new Error('')}
+      const n=await unsyncedCount();
+      if(n){dropToken();throw new Error(`This device has ${n} change${n===1?'':'s'} from ${EMAIL} not yet saved to that account's Google Drive. Sign in as ${EMAIL} first so they're saved, then switch.`)}
+      if(!confirm(`Switch to ${e}?\n\nThe records for ${EMAIL} will be removed from this device. They stay safe in that account's Google Drive.`)){dropToken();throw new Error(`Still set up for ${EMAIL}. Nothing was changed.`)}
+      await clearDevice()}
+    if(!EMAIL)setAcct(e);
+    setG({on:1});
     startSession(interactive?$('#lockstay').checked:localStorage.getItem(STAY_KEY)==='1');
     unlock();syncNow(false);
   }catch(e){
@@ -2576,9 +2613,16 @@ async function lockSignIn(interactive){
 }
 let locked=true;
 $('#lockgo').onclick=()=>lockSignIn(true);
+$('#lockalt').onclick=()=>lockSignIn(true,true);
+function sendFeedback(){closeMenu();
+  const body=`\n\n\n---\nPlease keep this line so we can help: ${navigator.userAgent}`;
+  location.href=`mailto:foryourrecordsstaff@gmail.com?subject=${encodeURIComponent('For Your Records beta feedback')}&body=${encodeURIComponent(body)}`}
+$('#fbbtn').onclick=sendFeedback;
 openDB().then(load).then(()=>{
+  // Records saved on this device before sign-in was open to everyone belong to the app's first user.
+  if(!EMAIL&&(receipts.length||trips.length||taxdocs.length||incomeRecs.length||GS().on))setAcct(LEGACY_EMAIL);
   if(sessionOk()){unlock();whenGoogle().then(()=>autoSync())}   // signed in within the last 24 hours on this device
-  else{showLock();whenGoogle().then(()=>lockSignIn(false))}    // locked; try a silent sign-in, otherwise the button asks
+  else{showLock();if(EMAIL)whenGoogle().then(()=>lockSignIn(false))}    // locked; try a silent sign-in for the known account, otherwise the button asks
 }).catch(e=>{document.body.classList.remove('locked');$('#lock').hidden=true;$('#main').innerHTML='<div class="card">Storage unavailable: '+esc(e.message||e)+'</div>'});
 navigator.storage?.persist?.();
 </script>
