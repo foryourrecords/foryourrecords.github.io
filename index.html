@@ -64,6 +64,16 @@ body.locked #drawer,body.locked #scrim{display:none!important}
 .rule{padding:10px 12px;border-radius:12px;border:1px solid var(--line2);background:var(--card2);font-size:14px;line-height:1.45}
 .rule b{display:block;font-size:12px;margin-bottom:2px;color:var(--muted)}
 .rule.warn{border-color:var(--warn)}.rule.warn b{color:var(--warn)}
+.tag{display:inline-block;padding:1px 8px;border-radius:999px;font-size:11.5px;font-weight:600;border:1px solid var(--line2);color:var(--muted)}
+.tag.approved{color:var(--accent);border-color:var(--accent)}.tag.rejected{color:var(--danger);border-color:var(--danger)}.tag.paid{background:var(--accent);color:var(--on-accent);border-color:transparent}
+.trow{padding:8px 0 12px;border-bottom:1px solid var(--line)}.trow:last-of-type{border-bottom:0}
+.trow .item{border:0;padding:4px 0 8px;cursor:default}.trow .thumb{cursor:zoom-in}
+.dbtns{display:flex;gap:6px;flex-wrap:wrap;align-items:center}
+.dbtns button,button.mini{min-height:34px;padding:0 12px;border:1px solid var(--line2);background:var(--card2);color:var(--text);border-radius:10px;font:inherit;font-size:13px;cursor:pointer}
+.dbtns button.on{border-color:var(--accent);background:var(--tint);color:var(--accent);font-weight:600}
+.dbtns button.on.rej{border-color:var(--danger);color:var(--danger);background:none}
+.dbtns button:disabled{opacity:.45;cursor:default}
+.dnote{margin-top:8px}
 .beta{display:inline-block;margin-left:6px;padding:1px 7px;border:1px solid var(--line2);border-radius:999px;font-size:11px;font-weight:600;color:var(--muted);vertical-align:2px;letter-spacing:0}
 body.locked header,body.locked nav,body.locked main,body.locked #report{display:none!important}
 @media (max-width:479px){header h1 .full{display:none}}
@@ -220,6 +230,8 @@ td.r,th.r{text-align:right}
   <p class="dlabel">Tax and banking</p>
   <button class="ditem" type="button" data-dv="esttax"><i><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 19L19 5"/><circle cx="7.5" cy="7.5" r="2.5"/><circle cx="16.5" cy="16.5" r="2.5"/></svg></i><span><b>Tax</b><small>Estimate, year-end forms, documents</small></span></button>
   <button class="ditem" type="button" data-dv="bank"><i><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 9.5l9-5.5 9 5.5"/><path d="M5.5 10v8M10 10v8M14 10v8M18.5 10v8M3 20.5h18"/></svg></i><span><b>Bank</b><small>Match a statement to your receipts</small></span></button>
+  <p class="dlabel">Team</p>
+  <button class="ditem" type="button" data-dv="team"><i><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3"/><path d="M3.5 19c.5-3 2.7-5 5.5-5s5 2 5.5 5"/><circle cx="17" cy="9" r="2.4"/><path d="M16 14.2c2.4.2 4 1.9 4.5 4.3"/></svg></i><span><b>Team</b><small>Staff reports and approvals</small></span></button>
   <p class="dlabel">Beta</p>
   <button class="ditem" type="button" id="fbbtn"><i><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 5.5h16v11H9l-5 4z"/><path d="M8 9.5h8M8 12.5h5"/></svg></i><span><b>Send feedback</b><small>Tell us what to fix or add</small></span></button>
 </aside>
@@ -228,6 +240,7 @@ td.r,th.r{text-align:right}
 <div id="lightbox" onclick="this.style.display='none'"><img id="lbimg"></div>
 
 <script src="https://accounts.google.com/gsi/client" async defer></script>
+<script src="https://apis.google.com/js/api.js" async defer></script>
 <script>
 // ---------- icons ----------
 const SVI=p=>'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'+p+'</svg>';
@@ -235,8 +248,8 @@ const I={dl:SVI('<path d="M12 4v11M7 11l5 5 5-5M5 20h14"/>'),receipt:SVI('<path 
 // ---------- storage (IndexedDB) ----------
 let db;
 function openDB(){return new Promise((res,rej)=>{
-  const r=indexedDB.open('expense-tracker',3);
-  r.onupgradeneeded=()=>{const d=r.result;for(const s of ['receipts','trips','taxdocs','income'])if(!d.objectStoreNames.contains(s))d.createObjectStore(s,{keyPath:'id'});};
+  const r=indexedDB.open('expense-tracker',4);
+  r.onupgradeneeded=()=>{const d=r.result;for(const s of ['receipts','trips','taxdocs','income','team'])if(!d.objectStoreNames.contains(s))d.createObjectStore(s,{keyPath:'id'});};
   r.onsuccess=()=>{db=r.result;res()};r.onerror=()=>rej(r.error);
 });}
 const tx=(s,m='readonly')=>db.transaction(s,m).objectStore(s);
@@ -256,10 +269,10 @@ const esc=s=>String(s??'').replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&g
 const money=n=>'$'+(Number(n)||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
 const today=()=>new Date().toISOString().slice(0,10);
 let view='summary', year=String(new Date().getFullYear());
-let receipts=[],trips=[],taxdocs=[],incomeRecs=[];
+let receipts=[],trips=[],taxdocs=[],incomeRecs=[],teamRecs=[];
 
 async function load(){
-  receipts=await all('receipts');trips=await all('trips');taxdocs=await all('taxdocs');incomeRecs=await all('income');
+  receipts=await all('receipts');trips=await all('trips');taxdocs=await all('taxdocs');incomeRecs=await all('income');teamRecs=await all('team');
   for(const d of incomeRecs)if(!d.updated){d.updated=Date.now();await put('income',d)}
   incomeRecs.sort((a,b)=>String(b.date).localeCompare(String(a.date)));
   for(const d of taxdocs)if(!d.updated){d.updated=Date.now();await put('taxdocs',d)}
@@ -506,13 +519,13 @@ new MutationObserver(syncBack).observe($('#main'),{childList:true}); // forms re
 function render(){
   if(lastView!==null&&view!==lastView){navStack.push(lastView);if(navStack.length>30)navStack.shift()}lastView=view;
   inForm=false;updateStatus();
-  const inMore=TAXV.includes(view)||view==='bank'; // Tax and Bank live in the side panel, not the bottom bar
+  const inMore=TAXV.includes(view)||view==='bank'||view==='team'; // Tax and Bank live in the side panel, not the bottom bar
   const tab=inMore?'':['receipts','mileage','settings'].includes(view)?view:'summary';
   document.querySelectorAll('#nav button').forEach(b=>{const on=b.dataset.v===tab;b.classList.toggle('on',on);if(on)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current')});
   $('#hset').classList.toggle('on',view==='settings');
   $('#menubtn').classList.toggle('on',inMore);
-  document.querySelectorAll('#drawer .ditem').forEach(b=>{const on=inMore&&((b.dataset.dv==='bank')===(view==='bank'));b.classList.toggle('on',on);if(on)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current')});
-  ({summary:vSummary,receipts:vReceipts,mileage:vMileage,qbexport:vQbExport,audit:vAudit,homeoffice:vHomeOffice,esttax:vEstTax,bank:vBank,taxforms:vTaxForms,taxdocs:vTaxDocs,settings:vSettings})[view]();
+  document.querySelectorAll('#drawer .ditem').forEach(b=>{const on=inMore&&b.dataset.dv===(TAXV.includes(view)?'esttax':view);b.classList.toggle('on',on);if(on)b.setAttribute('aria-current','page');else b.removeAttribute('aria-current')});
+  ({summary:vSummary,receipts:vReceipts,mileage:vMileage,qbexport:vQbExport,audit:vAudit,homeoffice:vHomeOffice,esttax:vEstTax,bank:vBank,team:vTeam,taxforms:vTaxForms,taxdocs:vTaxDocs,settings:vSettings})[view]();
   if(view==='settings'&&!isStandalone()){$('#main').insertAdjacentHTML('afterbegin',installCard());const ib=$('#instbtn');if(ib)ib.onclick=async()=>{const p=installPrompt;if(!p)return;installPrompt=null;p.prompt();try{await p.userChoice}catch(e){}render()}}
   if(TAXV.includes(view)){
     $('#main').insertAdjacentHTML('afterbegin',`<div class="seg">${[['esttax','Estimate'],['taxforms','Year-end forms'],['taxdocs','Documents']].map(([v,l])=>`<button data-sv="${v}" class="${v===view?'on':''}"${v===view?' aria-current="page"':''}>${l}</button>`).join('')}</div>`);
@@ -918,7 +931,7 @@ function perDiemForm(r){inForm=true;const isNew=!r;
 // ----- receipts -----
 function receiptItem(x){return `<div class="item" data-id="${x.id}">
       ${(x.photos||[])[0]?`<img class="thumb" src="${x.photos[0]}">`:'<div class="thumb nophoto" title="No photo">'+I.receipt+'</div>'}
-      <div class="main"><div class="t">${esc(x.vendor)}</div><div class="s">${x.date} · ${esc(x.category)}${x.client?` · ${esc(x.client)}`:''}${x.billable?(x.invoiced?' · invoiced':' · billable'):''}${(x.photos||[]).length>1?` · ${x.photos.length} photos`:''}</div></div>
+      <div class="main"><div class="t">${esc(x.vendor)}</div><div class="s">${x.date} · ${esc(x.category)}${x.client?` · ${esc(x.client)}`:''}${x.billable?(x.invoiced?' · invoiced':' · billable'):''}${(x.photos||[]).length>1?` · ${x.photos.length} photos`:''}</div>${repTag(x)}</div>
       <div class="amt">${money(x.amount)}</div></div>`}
 function vReceipts(){
   upQueue=[];upTotal=0;
@@ -960,6 +973,7 @@ function receiptForm(r,opts={}){
    <label>Client (optional)</label><input id="cl" list="clients" value="${esc(r.client||'')}" autocomplete="off" placeholder="e.g. Acme Corp">${clientDatalist()}
    <label style="display:flex;gap:8px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" id="bl" style="width:auto" ${r.billable?'checked':''}> Billable to this client</label>
    <label style="display:flex;gap:8px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" id="iv" style="width:auto" ${r.invoiced?'checked':''}> Already invoiced${r.invoiced?` (${esc(r.invoiced)})`:''}</label>
+   ${teamCfg().role==='staff'?`<label style="display:flex;gap:8px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" id="rb" style="width:auto" ${r.reimb?'checked':''}> Reimbursable: send to my employer${r.rep?` (${ST[r.rep.s||'sent']})`:''}</label>`:''}
    <label>Notes / business purpose</label><textarea id="n" rows="2">${esc(r.notes)}</textarea>
    <div id="rules" aria-live="polite"></div>
    <label>Photos</label><div class="photos" id="ph"></div>
@@ -1016,7 +1030,7 @@ function receiptForm(r,opts={}){
     const a=parseFloat($('#a').value);if(!$('#d').value||isNaN(a)||!$('#v').value.trim()){alert('Date, vendor and amount are required.');return}
     const vn=$('#v').value.trim().toLowerCase();
     if(isNew&&receipts.some(x=>String(x.vendor).trim().toLowerCase()===vn&&x.date===$('#d').value&&Math.abs(Number(x.amount)-a)<0.005)&&!confirm('A receipt from this vendor with the same date and amount is already saved. Save this one anyway?'))return;
-    await put('receipts',{...r,id:r.id,date:$('#d').value,vendor:$('#v').value.trim(),amount:a,category:$('#c').value,client:canonClient($('#cl').value,clientNames()),billable:$('#bl').checked,invoiced:$('#iv').checked?(r.invoiced||today()):'',notes:$('#n').value,photos,pids,origs:photos.map((_,i)=>origs[i]||''),updated:Date.now()});
+    await put('receipts',{...r,id:r.id,date:$('#d').value,vendor:$('#v').value.trim(),amount:a,category:$('#c').value,client:canonClient($('#cl').value,clientNames()),billable:$('#bl').checked,invoiced:$('#iv').checked?(r.invoiced||today()):'',reimb:$('#rb')?$('#rb').checked:!!r.reimb,notes:$('#n').value,photos,pids,origs:photos.map((_,i)=>origs[i]||''),updated:Date.now()});
     (r.pids||[]).filter(p=>!pids.includes(p)).forEach(p=>{queueDel(`p_${p}.jpg`);queueDel(`o_${p}.jpg`)});
     year=$('#d').value.slice(0,4);await load();autoSync();upTotal?nextUpload():render();};
   if(opts.file)add([opts.file]); // opened from "Upload receipts / invoices": load the file and read it right away
@@ -1036,7 +1050,7 @@ function vMileage(){
   const draw=()=>{const f=flt.t,active=!!(f.q.trim()||f.when);
     const ts=trips.filter(x=>inWhen(x,f.when)&&hits(f.q,[x.from,x.to,x.purpose,x.client,x.notes,Number(x.miles||0).toFixed(1),x.date]));
     $('#tlist').innerHTML=ts.length?ts.map(x=>`<div class="item" data-id="${x.id}">${(x.photos||[])[0]?`<img class="thumb" src="${x.photos[0]}" alt="Route screenshot">`:'<div class="thumb">'+I.car+'</div>'}
-      <div class="main"><div class="t">${esc(x.from||'—')} → ${esc(x.to||'—')}</div><div class="s">${x.date} · ${esc(x.purpose)}${x.roundTrip?' · round trip':''}${x.client?` · ${esc(x.client)}`:''}${x.billable?(x.invoiced?' · invoiced':' · billable'):''}</div></div>
+      <div class="main"><div class="t">${esc(x.from||'—')} → ${esc(x.to||'—')}</div><div class="s">${x.date} · ${esc(x.purpose)}${x.roundTrip?' · round trip':''}${x.client?` · ${esc(x.client)}`:''}${x.billable?(x.invoiced?' · invoiced':' · billable'):''}</div>${repTag(x)}</div>
       <div class="amt">${Number(x.miles).toFixed(1)} mi</div></div>`).join(''):`<p class="muted" style="margin:0">${active?'No trips match your search.':'No trips for this year.'}</p>`;
     if($('#fsum')){$('#fsum').textContent=`${ts.length} trip${ts.length===1?'':'s'} · ${ts.reduce((s,x)=>s+Number(x.miles||0),0).toLocaleString(undefined,{minimumFractionDigits:1,maximumFractionDigits:1})} mi${active?'':' in '+year}`;$('#fclr').hidden=!active}
     document.querySelectorAll('#tlist .item').forEach(e=>e.onclick=()=>tripForm(trips.find(t=>t.id===e.dataset.id)))};
@@ -1057,6 +1071,7 @@ function tripForm(t,prefillMiles,opts={}){
    <label>Client (optional)</label><input id="cl" list="clients" value="${esc(t.client||'')}" autocomplete="off" placeholder="e.g. Acme Corp">${clientDatalist()}
    <label style="display:flex;gap:8px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" id="bl" style="width:auto" ${t.billable?'checked':''}> Billable to this client</label>
    <label style="display:flex;gap:8px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" id="iv" style="width:auto" ${t.invoiced?'checked':''}> Already invoiced${t.invoiced?` (${esc(t.invoiced)})`:''}</label>
+   ${teamCfg().role==='staff'?`<label style="display:flex;gap:8px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" id="rb" style="width:auto" ${t.reimb?'checked':''}> Reimbursable: send to my employer${t.rep?` (${ST[t.rep.s||'sent']})`:''}</label>`:''}
    <div class="row"><div><label>Odometer start (optional)</label><input type="number" step="0.1" inputmode="decimal" id="os" value="${t.odoStart||(isNew?lastOdo:'')}"></div><div><label>Odometer end (optional)</label><input type="number" step="0.1" inputmode="decimal" id="oe" value="${t.odoEnd}"></div></div>
    <label>Miles <span class="muted">(one way, or the total if you use odometer readings)</span></label><input type="number" step="0.1" inputmode="decimal" id="m" value="${t.roundTrip&&t.miles?Math.round(t.miles/2*100)/100:t.miles}">
    <label style="display:flex;gap:8px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" id="rt" style="width:auto" ${t.roundTrip?'checked':''}> Round trip (count the miles both ways)</label>
@@ -1183,7 +1198,7 @@ function tripForm(t,prefillMiles,opts={}){
   $('#save').onclick=async()=>{const one=parseFloat($('#m').value);if(!$('#d').value||isNaN(one)||one<=0){alert('Date and miles are required.');return}
     const round=$('#rt').checked&&!$('#rt').disabled,m=round?Math.round(one*2*10)/10:one;
     const os=parseFloat($('#os').value),oe=parseFloat($('#oe').value);
-    await put('trips',{...t,id:t.id,date:$('#d').value,from:$('#f').value.trim(),to:$('#t').value.trim(),purpose:$('#p').value.trim(),client:canonClient($('#cl').value,clientNames()),billable:$('#bl').checked,invoiced:$('#iv').checked?(t.invoiced||today()):'',odoStart:isNaN(os)?null:os,odoEnd:isNaN(oe)?null:oe,miles:m,roundTrip:round,photos,pids,updated:Date.now()});
+    await put('trips',{...t,id:t.id,date:$('#d').value,from:$('#f').value.trim(),to:$('#t').value.trim(),purpose:$('#p').value.trim(),client:canonClient($('#cl').value,clientNames()),billable:$('#bl').checked,invoiced:$('#iv').checked?(t.invoiced||today()):'',reimb:$('#rb')?$('#rb').checked:!!t.reimb,odoStart:isNaN(os)?null:os,odoEnd:isNaN(oe)?null:oe,miles:m,roundTrip:round,photos,pids,updated:Date.now()});
     (t.pids||[]).filter(p=>!pids.includes(p)).forEach(p=>queueDel(`p_${p}.jpg`));
     year=$('#d').value.slice(0,4);await load();autoSync();upTotal?nextUpload():render();};
   if(opts.file){ // opened from "Upload route screenshots": use the day the screenshot was taken, attach it, and read it right away
@@ -2074,10 +2089,10 @@ async function checkAccount(){const e=await whoAmI();
   if(!EMAIL){setAcct(e);return}
   if(e!==EMAIL){dropToken();throw new Error(`You signed in as ${e}, but this device holds the records of ${EMAIL}. To switch, use “Sign out and lock” in Settings, then “Use a different Google account”.`)}}
 async function unsyncedCount(){let n=0;try{n=JSON.parse(localStorage.getItem('et-del')||'[]').length}catch(e){}
-  for(const st of ['receipts','trips','taxdocs','income'])for(const r of await all(st))if(!r._s||r.updated>r._s)n++;return n}
+  for(const st of ['receipts','trips','taxdocs','income','team'])for(const r of await all(st))if(!r._s||r.updated>r._s)n++;return n}
 // Removes this device's copy of the current person's records and personal settings (their Google Drive copy is untouched).
 async function clearDevice(){
-  for(const st of ['receipts','trips','taxdocs','income'])await req(tx(st,'readwrite').clear());
+  for(const st of ['receipts','trips','taxdocs','income','team'])await req(tx(st,'readwrite').clear());
   for(const k of ['et-settings','et-del','et-onb','et-checklist-hide','et-remind-hide','et-cal-skip','et-cals','et-dom','et-geo','et-session'])try{localStorage.removeItem(k)}catch(e){}
   try{localStorage.setItem('et-g',JSON.stringify({cid:GS().cid}))}catch(e){}
   setAcct('');await load()}
@@ -2139,7 +2154,7 @@ async function syncNow(interactive){
     for(const n of JSON.parse(localStorage.getItem('et-del')||'[]')){const f=byName.get(n);
       if(f){await api(`${API}/files/${f.id}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({trashed:true})});byName.delete(n)}}
     localStorage.setItem('et-del','[]');
-    for(const [store,pre] of [['receipts','r_'],['trips','t_'],['taxdocs','d_'],['income','i_']]){
+    for(const [store,pre] of [['receipts','r_'],['trips','t_'],['taxdocs','d_'],['income','i_'],['team','x_']]){
       const seen=new Set();
       for(const rec of await all(store)){
         const name=`${pre}${rec.id}.json`,f=byName.get(name);seen.add(name);
@@ -2153,6 +2168,7 @@ async function syncNow(interactive){
      if(f&&ru>lu){const j=await (await api(`${API}/files/${f.id}?alt=media`)).json();if(j&&typeof j==='object')localStorage.setItem('et-settings',JSON.stringify(j))}
      else if(lu&&(!f||lu>ru))await upload(folder,'settings.json',new Blob([JSON.stringify(cur)],{type:'application/json'}),'application/json',{updated:String(lu)},f?.id);}
     setG({last:Date.now()});await load();
+    if(teamCfg().role==='staff')try{await refreshOut(false)}catch(e){}
   }catch(e){if(!interactive&&!locked&&/popup_failed_to_open/.test(e.message||''))armGesture();
     syncErr=interactive?e.message:(/Drive error|Enter your|did not load|You signed/.test(e.message)?e.message:'Tap Sync to sign in to Google again.');}
   syncing=false;updateStatus();if(!inForm&&!syncErr&&!locked)render();
@@ -2167,6 +2183,233 @@ function armGesture(){if(gestureArmed||gestureUsed)return;gestureArmed=true;
   evs.forEach(ev=>document.addEventListener(ev,go,true))}
 document.addEventListener('visibilitychange',()=>{if(!document.hidden)autoSync()});
 window.addEventListener('online',autoSync);
+
+// ---------- team mode ----------
+// Staff send the owner a report of the receipts and trips they paid for. The report is one file in the staff member's own Google Drive,
+// shared with the owner's Gmail. The owner opens it with Google's file picker, approves, rejects or marks items paid, and sends the
+// decisions back into the same file. Staff see the result under "Sent". Nothing passes through a server of ours.
+const PICKER_KEY='AIzaSyBk0zyRjd4kzory_eyEaCpdL0IQSNrsmI8',PICKER_APP='535782394451'; // Google Picker API key (public, limited to this site) and the Google Cloud project number
+const TEAM_DEF={role:'',myName:'',employer:{name:'',email:''},staff:[]};
+const teamCfg=()=>({...TEAM_DEF,...(settings().team||{})});
+const saveTeam=o=>saveSettings({...settings(),team:{...teamCfg(),...o}});
+const isEmail=v=>/^[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+$/.test(String(v||'').trim());
+const ST={sent:'Sent',approved:'Approved',rejected:'Not approved',paid:'Paid'};
+const num=v=>{v=Number(v);return isFinite(v)?v:0};
+const str=(v,n=300)=>String(v??'').slice(0,n);
+const okImg=v=>typeof v==='string'&&v.length<2.5e6&&/^data:image\/(jpeg|png|webp);base64,/.test(v)&&!/[^A-Za-z0-9+\/=]/.test(v.slice(v.indexOf(',')+1));
+let teamNote='';
+function parseStaff(text){const out=[],seen=new Set();
+  for(const line of String(text||'').split(/\r?\n/)){const l=line.trim();if(!l)continue;
+    const m=l.match(/[^\s@<>,;]+@[^\s@<>,;]+\.[^\s@<>,;]+/);if(!m)continue;
+    const email=m[0].toLowerCase();if(seen.has(email))continue;seen.add(email);
+    out.push({name:l.replace(m[0],'').replace(/[<>,;]/g,' ').replace(/\s+/g,' ').trim(),email})}
+  return out}
+const staffText=l=>(l||[]).map(x=>x.name?`${x.name}, ${x.email}`:x.email).join('\n');
+const repTag=x=>x.rep?`<div class="s"><span class="tag ${x.rep.s||'sent'}">${ST[x.rep.s||'sent']}</span>${x.rep.note?` ${esc(x.rep.note)}`:''}</div>`:(x.reimb?'<div class="s"><span class="tag">To send</span></div>':'');
+const shrinkImg=(src,max,q)=>new Promise(res=>{const im=new Image();im.onload=()=>{const k=Math.min(1,max/Math.max(im.width,im.height)),c=document.createElement('canvas');
+  c.width=Math.max(1,Math.round(im.width*k));c.height=Math.max(1,Math.round(im.height*k));c.getContext('2d').drawImage(im,0,0,c.width,c.height);res(c.toDataURL('image/jpeg',q))};im.onerror=()=>res('');im.src=src});
+const tripAmt=t=>Math.round((Number(t.miles)||0)*rateFor(t.date)*100)/100;
+
+// ---- staff side: build, send, and follow a report ----
+async function buildReport(recs,size){
+  const items=[];
+  for(const {k,rec} of recs){
+    const ph=[];for(const p of (rec.photos||[]).slice(0,size.n))if(size.px){const z=await shrinkImg(p,size.px,size.q);if(z)ph.push(z)}
+    if(k==='r')items.push({k:'r',id:rec.id,date:rec.date,vendor:rec.vendor||'',amount:Number(rec.amount)||0,category:rec.category||'',client:rec.client||'',notes:rec.notes||'',photos:ph});
+    else{const rate=rateFor(rec.date);items.push({k:'t',id:rec.id,date:rec.date,from:rec.from||'',to:rec.to||'',purpose:rec.purpose||'',client:rec.client||'',miles:Number(rec.miles)||0,rate,amount:tripAmt(rec),photos:ph.slice(0,1)})}}
+  return items}
+async function sendReport(keys,asFile){
+  const T=teamCfg(),to=String(T.employer.email||'').trim().toLowerCase();
+  if(!asFile&&!isEmail(to))throw new Error('Enter your employer’s Gmail address first.');
+  const recs=keys.map(key=>{const [k,id]=key.split(':');const rec=(k==='r'?receipts:trips).find(x=>x.id===id);return rec&&{k,rec}}).filter(Boolean);
+  if(!recs.length)throw new Error('Tick at least one item to send.');
+  const id=uid(),sent=Date.now();let blob=null,items=[];
+  for(const size of [{n:2,px:1100,q:.62},{n:1,px:800,q:.55},{n:0,px:0,q:0}]){ // shrink the pictures until the report fits one upload
+    items=await buildReport(recs,size);
+    blob=new Blob([JSON.stringify({v:1,kind:'report',id,from:{name:T.myName||'',email:EMAIL},to:{name:T.employer.name||'',email:to},sent,items,decisions:{},decAt:0,updated:sent})],{type:'application/json'});
+    if(blob.size<4.5e6)break}
+  if(blob.size>=4.5e6)throw new Error('That is too much for one report. Send fewer items at a time.');
+  const name=`For Your Records report - ${T.myName||EMAIL||'staff'} - ${today()}.json`;let fileId='';
+  if(asFile)await download(name,blob,'application/json');
+  else{
+    await getToken(true);await checkAccount();
+    const f=await upload(await ensureFolder(),name,blob,'application/json',{kind:'report'});fileId=f.id;
+    try{await api(`${API}/files/${fileId}/permissions?sendNotificationEmail=true&emailMessage=${encodeURIComponent((T.myName||EMAIL)+' sent you an expense report from For Your Records. To review it: open https://foryourrecords.github.io/ , tap the menu, choose Team, then Check for new reports.')}`,
+      {method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({type:'user',role:'writer',emailAddress:to})})}
+    catch(e){try{await api(`${API}/files/${fileId}`,{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify({trashed:true})})}catch(x){}
+      throw new Error('Could not share the report with '+to+'. '+(e.message||''))}}
+  for(const {k,rec} of recs)await put(k==='r'?'receipts':'trips',{...rec,reimb:true,rep:{id,fileId,to,at:sent,s:'sent',note:'',mt:''},updated:Date.now()});
+  await load();autoSync();return recs.length}
+// Look at each sent report in Drive for the owner's decisions, and copy them onto the receipts and trips.
+async function refreshOut(interactive){
+  if(interactive)await getToken(true);else if(!(tok&&Date.now()<tokExp-60000))return 0;
+  const groups=new Map();
+  for(const [st,arr] of [['receipts',receipts],['trips',trips]])for(const r of arr)if(r.rep?.fileId&&r.rep.s!=='paid'){
+    if(!groups.has(r.rep.fileId))groups.set(r.rep.fileId,[]);groups.get(r.rep.fileId).push([st,r])}
+  let n=0;
+  for(const [fileId,list] of groups){
+    try{const meta=await (await api(`${API}/files/${fileId}?fields=modifiedTime,trashed`)).json();
+      if(meta.trashed||list.every(([,r])=>r.rep.mt===meta.modifiedTime))continue;
+      const j=await (await api(`${API}/files/${fileId}?alt=media`)).json(),dec=j&&j.decisions||{};
+      for(const [st,r] of list){const d=dec[r.id]||{},s=['approved','rejected','paid'].includes(d.s)?d.s:'sent',note=str(d.note,200);
+        if(s!==r.rep.s||note!==(r.rep.note||'')||r.rep.mt!==meta.modifiedTime){await put(st,{...r,rep:{...r.rep,s,note,mt:meta.modifiedTime},updated:Date.now()});n++}}
+    }catch(e){if(interactive)throw e}}
+  if(n)await load();return n}
+
+// ---- owner side: open reports, decide, send decisions back ----
+function gapiReady(){return new Promise((res,rej)=>{if(window.google?.picker)return res();if(!window.gapi)return rej(new Error('Google’s file picker did not load. Check your internet connection.'));
+  gapi.load('picker',{callback:res,onerror:()=>rej(new Error('Google’s file picker did not load.'))})})}
+async function pickReports(){
+  await getToken(true);await checkAccount();await gapiReady();
+  return new Promise(res=>{
+    const view=own=>new google.picker.DocsView(google.picker.ViewId.DOCS).setMimeTypes('application/json').setIncludeFolders(false).setOwnedByMe(own).setQuery('For Your Records report');
+    new google.picker.PickerBuilder().setAppId(PICKER_APP).setOAuthToken(tok).setDeveloperKey(PICKER_KEY).setTitle('Choose the reports to open')
+      .addView(view(false)).addView(view(true)).enableFeature(google.picker.Feature.MULTISELECT_ENABLED)
+      .setCallback(d=>{const a=d[google.picker.Response.ACTION];
+        if(a===google.picker.Action.PICKED)res((d[google.picker.Response.DOCUMENTS]||[]).map(x=>x[google.picker.Document.ID]));
+        else if(a===google.picker.Action.CANCEL)res([])}).build().setVisible(true)})}
+const cleanItem=x=>{if(!x||typeof x!=='object')return null;const photos=(Array.isArray(x.photos)?x.photos:[]).filter(okImg).slice(0,2),id=str(x.id,60).replace(/[^\w-]/g,'');if(!id)return null;
+  return x.k==='t'?{k:'t',id,date:str(x.date,10),from:str(x.from),to:str(x.to),purpose:str(x.purpose),client:str(x.client,80),miles:num(x.miles),rate:num(x.rate),amount:num(x.amount),photos:photos.slice(0,1)}
+    :{k:'r',id,date:str(x.date,10),vendor:str(x.vendor),amount:num(x.amount),category:str(x.category,80),client:str(x.client,80),notes:str(x.notes,600),photos}};
+const cleanDec=(d,items)=>{const o={};for(const it of items){const x=d&&d[it.id];if(x&&['approved','rejected','paid'].includes(x.s))o[it.id]={s:x.s,note:str(x.note,200),at:num(x.at)}}return o};
+async function addReport(j,meta){
+  if(!j||j.kind!=='report'||!Array.isArray(j.items))throw new Error('That file is not a For Your Records report.');
+  const rid=str(j.id,40).replace(/[^\w-]/g,'')||uid(),id='in_'+rid;
+  const items=j.items.slice(0,200).map(cleanItem).filter(Boolean);
+  const fe=str(meta.owner||j.from?.email,120).trim().toLowerCase();
+  let rec={id,rid,kind:'report',fileId:meta.fileId||'',fileName:str(meta.fileName,200)||'report.json',canEdit:meta.canEdit!==false,verified:!!meta.owner,
+    from:{name:str(j.from?.name,80),email:isEmail(fe)?fe:''},to:{name:str(j.to?.name,80),email:str(j.to?.email,120)},sent:num(j.sent),items,decisions:cleanDec(j.decisions,items),decAt:num(j.decAt),dirty:false,added:{},updated:Date.now()};
+  const old=await req(tx('team').get(id));
+  if(old){rec.added=old.added||{};if(old.dirty){rec.decisions=old.decisions;rec.decAt=old.decAt;rec.dirty=true}}
+  await put('team',rec);return rec}
+async function openReportFile(id){
+  await getToken(true);await checkAccount();
+  const meta=await (await api(`${API}/files/${id}?fields=id,name,owners(emailAddress),capabilities(canEdit)`)).json();
+  const j=await (await api(`${API}/files/${id}?alt=media`)).json();
+  return addReport(j,{fileId:id,fileName:meta.name,owner:meta.owners?.[0]?.emailAddress,canEdit:meta.capabilities?.canEdit})}
+async function sendDecisions(rec){
+  if(!rec.fileId)throw new Error('This report came from a file, not from Google Drive. Use “Email decisions” instead.');
+  await getToken(true);await checkAccount();
+  const blob=new Blob([JSON.stringify({v:1,kind:'report',id:rec.rid,from:rec.from,to:rec.to,sent:rec.sent,items:rec.items,decisions:rec.decisions,decAt:rec.decAt,updated:Date.now()})],{type:'application/json'});
+  try{await upload('',rec.fileName,blob,'application/json',{kind:'report'},rec.fileId)}
+  catch(e){throw new Error(/ 403/.test(e.message)?'Google would not let this app change the report. Use “Email decisions” instead.':e.message)}
+  await put('team',{...rec,dirty:false,updated:Date.now()})}
+function decisionMail(rec){
+  const who=rec.from.name||rec.from.email;
+  const lines=rec.items.map(it=>{const d=rec.decisions[it.id]||{};return `${d.s?ST[d.s]:'Pending'}: ${it.k==='t'?`${it.from} to ${it.to}`:it.vendor} (${it.date}, ${money(it.amount)})${d.note?' - '+d.note:''}`});
+  return `mailto:${rec.from.email}?subject=${encodeURIComponent('Your expense report')}&body=${encodeURIComponent(`Hi ${who},\n\nHere is where your expense report stands:\n\n${lines.join('\n')}\n`)}`}
+const catFor=pref=>{const c=settings().categories;return c.find(x=>x===pref)||(pref&&c.find(x=>x.toLowerCase().includes(String(pref).toLowerCase().slice(0,5))))||c.find(x=>/^other/i.test(x))||c[0]};
+async function addToMine(rec,itemId){
+  const it=rec.items.find(x=>x.id===itemId);if(!it||rec.added?.[itemId])return;
+  const who=rec.from.name||rec.from.email,ph=it.photos||[];
+  await put('receipts',it.k==='t'
+    ?{id:uid(),date:it.date,vendor:`${who} mileage`,amount:it.amount,category:catFor('Travel'),client:it.client,notes:`Reimbursed to ${who}: ${it.miles} mi at ${money(it.rate)} per mile, ${it.from} to ${it.to}. ${it.purpose}`.trim(),photos:ph,pids:ph.map(()=>uid()),origs:ph.map(()=>''),updated:Date.now()}
+    :{id:uid(),date:it.date,vendor:it.vendor,amount:it.amount,category:catFor(it.category),client:it.client,notes:`Reimbursed to ${who}. ${it.notes}`.trim(),photos:ph,pids:ph.map(()=>uid()),origs:ph.map(()=>''),updated:Date.now()});
+  await put('team',{...rec,added:{...(rec.added||{}),[itemId]:true},updated:Date.now()})}
+const teamRedraw=()=>{const y=window.scrollY;render();window.scrollTo(0,y)};
+async function teamDecide(rec,patch){ // patch: {itemId:{s,note}|null}
+  const dec={...rec.decisions};for(const [k,v] of Object.entries(patch)){if(v)dec[k]={s:v.s,note:v.note||'',at:Date.now()};else delete dec[k]}
+  await put('team',{...rec,decisions:dec,decAt:Date.now(),dirty:true,updated:Date.now()});await load();teamRedraw()}
+
+// ---- the Team screen ----
+function vTeam(){
+  const T=teamCfg();
+  if(!T.role){
+    $('#main').innerHTML=`<div class="card"><h3 style="margin-top:0">Team</h3>
+     <p class="muted">Use this if you have staff, or if you are staff. Staff send the receipts and trips they paid for out of pocket. The owner approves them and marks them paid. Reports travel through Google Drive, so there is still no server in the middle.</p>
+     <div class="actions"><button class="btn" id="rown">I own the business</button><button class="btn sec" id="rstf">I work for someone</button></div></div>`;
+    $('#rown').onclick=()=>{saveTeam({role:'owner'});render()};$('#rstf').onclick=()=>{saveTeam({role:'staff'});render()};return}
+  (T.role==='staff'?teamStaff:teamOwner)(T);
+  $('#main').insertAdjacentHTML('beforeend','<div class="actions" style="justify-content:center"><button class="btn sec" id="trole">Change my role</button></div>');
+  $('#trole').onclick=()=>{saveTeam({role:''});render()};
+  if($('#tmsg')&&teamNote){$('#tmsg').textContent=teamNote;teamNote=''}
+}
+function sentGroups(){
+  const g=new Map();
+  for(const [k,arr] of [['r',receipts],['t',trips]])for(const rec of arr)if(rec.rep?.id){if(!g.has(rec.rep.id))g.set(rec.rep.id,{id:rec.rep.id,to:rec.rep.to,at:rec.rep.at,fileId:rec.rep.fileId,items:[]});g.get(rec.rep.id).items.push({k,rec})}
+  return [...g.values()].sort((a,b)=>b.at-a.at)}
+function teamStaff(T){
+  const ready=[...receipts.filter(x=>x.reimb&&!x.rep).map(rec=>({k:'r',rec})),...trips.filter(x=>x.reimb&&!x.rep).map(rec=>({k:'t',rec}))].sort((a,b)=>String(b.rec.date).localeCompare(String(a.rec.date)));
+  const title=({k,rec})=>k==='r'?esc(rec.vendor):`${esc(rec.from||'—')} → ${esc(rec.to||'—')}`,amt=({k,rec})=>money(k==='r'?rec.amount:tripAmt(rec));
+  const groups=sentGroups().slice(0,12);
+  $('#main').innerHTML=`<div class="card"><h3 style="margin-top:0">Your employer</h3>
+   <label for="tn">Your name (shown on the report)</label><input id="tn" value="${esc(T.myName)}" autocomplete="name">
+   <label for="en">Employer or business name</label><input id="en" value="${esc(T.employer.name)}">
+   <label for="ee">Employer’s Gmail address</label><input id="ee" type="email" value="${esc(T.employer.email)}" autocapitalize="off" autocorrect="off">
+   <p class="muted">This is the Google account your employer signs in to For Your Records with. Google emails them a link when you send a report.</p>
+   <div class="actions"><button class="btn sec" id="tsave">Save</button></div></div>
+  <div class="card"><h3 style="margin-top:0">Ready to send</h3>
+   ${ready.length?ready.map(x=>`<label class="item" style="cursor:pointer"><input type="checkbox" class="tck" value="${x.k}:${esc(x.rec.id)}" checked><div class="main"><div class="t">${title(x)}</div><div class="s">${esc(x.rec.date)}${x.k==='r'?' · '+esc(x.rec.category||''):' · mileage'}</div></div><div class="amt">${amt(x)}</div></label>`).join('')
+     :'<p class="muted" style="margin:0">Nothing yet. Tick “Reimbursable” when you add or edit a receipt or trip, and it shows up here.</p>'}
+   ${ready.length?'<div class="actions"><button class="btn" id="tsend">Send report</button><button class="btn sec" id="tfile">Save as a file instead</button></div>':''}
+   <p class="muted" id="tmsg" aria-live="polite"></p></div>
+  <div class="card"><h3 style="margin-top:0">Sent</h3>
+   ${groups.length?groups.map(g=>`<div style="margin-bottom:10px"><div class="muted">Sent ${new Date(g.at).toLocaleDateString()} to ${esc(g.to||'a file')} · ${g.items.length} item${g.items.length===1?'':'s'} · ${money(g.items.reduce((s,x)=>s+(x.k==='r'?Number(x.rec.amount)||0:tripAmt(x.rec)),0))}</div>
+     ${g.items.map(x=>`<div class="item sent" data-k="${x.k}" data-id="${esc(x.rec.id)}"><div class="main"><div class="t">${title(x)}</div>${repTag(x.rec)}</div><div class="amt">${amt(x)}</div>${x.rec.rep.s==='rejected'?`<button class="mini fix" data-k="${x.k}" data-id="${esc(x.rec.id)}">Fix and resend</button>`:''}</div>`).join('')}</div>`).join('')
+     :'<p class="muted" style="margin:0">Nothing sent yet.</p>'}
+   <div class="actions"><button class="btn sec" id="tref">Check for updates</button></div></div>`;
+  const saveMe=()=>{const e=$('#ee').value.trim().toLowerCase();if(e&&!isEmail(e)){teamNote='That does not look like an email address.';return false}
+    saveTeam({myName:$('#tn').value.trim(),employer:{name:$('#en').value.trim(),email:e}});return true};
+  $('#tsave').onclick=()=>{if(saveMe())teamNote='Saved.';teamRedraw()};
+  const send=async asFile=>{if(!saveMe()){teamRedraw();return}
+    const keys=[...document.querySelectorAll('.tck:checked')].map(c=>c.value),msg=$('#tmsg');
+    document.querySelectorAll('#tsend,#tfile').forEach(b=>b.disabled=true);msg.textContent=asFile?'Building the file…':'Sending…';
+    try{const n=await sendReport(keys,asFile);teamNote=asFile?`Saved ${n} item${n===1?'':'s'} to a file. Send it to your employer, who can open it with “Open a report file” on the Team screen.`:`Sent ${n} item${n===1?'':'s'} to ${teamCfg().employer.email}. They get an email from Google.`}
+    catch(e){teamNote=e.message||'Could not send the report.'}
+    teamRedraw()};
+  if($('#tsend')){$('#tsend').onclick=()=>send(false);$('#tfile').onclick=()=>send(true)}
+  $('#tref').onclick=async()=>{$('#tref').disabled=true;try{const n=await refreshOut(true);teamNote=n?`Updated ${n} item${n===1?'':'s'}.`:'Nothing new.'}catch(e){teamNote=e.message||'Could not check.'}teamRedraw()};
+  document.querySelectorAll('.fix').forEach(b=>b.onclick=async e=>{e.stopPropagation();const st=b.dataset.k==='r'?'receipts':'trips',rec=(b.dataset.k==='r'?receipts:trips).find(x=>x.id===b.dataset.id);
+    if(rec){await put(st,{...rec,rep:null,reimb:true,updated:Date.now()});await load();teamRedraw()}});
+  document.querySelectorAll('.item.sent').forEach(e=>e.onclick=()=>{const rec=(e.dataset.k==='r'?receipts:trips).find(x=>x.id===e.dataset.id);if(rec)e.dataset.k==='r'?openReceipt(rec):tripForm(rec)});
+}
+function reportCard(rec){
+  const T=teamCfg(),who=rec.from.name||rec.from.email||'Unknown sender',known=T.staff.some(x=>x.email===rec.from.email);
+  const tot=rec.items.reduce((s,x)=>s+x.amount,0),cnt=s=>rec.items.filter(x=>(rec.decisions[x.id]||{}).s===s).length,pend=rec.items.filter(x=>!rec.decisions[x.id]).length;
+  const rows=rec.items.map(it=>{const d=rec.decisions[it.id]||{},s=d.s||'',ds=(k,l,cls)=>`<button data-act="dec" data-i="${esc(it.id)}" data-s="${k}" class="${cls||''} ${s===k?'on':''}"${k==='paid'&&s!=='approved'&&s!=='paid'?' disabled':''}>${l}</button>`;
+    return `<div class="trow" data-i="${esc(it.id)}"><div class="item">${it.photos[0]?`<img class="thumb" src="${it.photos[0]}" alt="Receipt photo">`:`<div class="thumb nophoto" title="No photo">${it.k==='t'?I.car:I.receipt}</div>`}
+      <div class="main"><div class="t">${it.k==='t'?`${esc(it.from||'—')} → ${esc(it.to||'—')}`:esc(it.vendor)}</div><div class="s">${esc(it.date)} · ${it.k==='t'?`${it.miles} mi at ${money(it.rate)}/mi · ${esc(it.purpose)}`:esc(it.category)}${it.client?' · '+esc(it.client):''}</div>${it.k==='r'&&it.notes?`<div class="s">${esc(it.notes)}</div>`:''}</div><div class="amt">${money(it.amount)}</div></div>
+      <div class="dbtns">${ds('approved','Approve')}${ds('rejected','Not approved','rej')}${ds('paid','Paid')}
+       ${(s==='approved'||s==='paid')?(rec.added?.[it.id]?'<span class="tag">In your expenses</span>':'<button class="mini" data-act="mine" data-i="'+esc(it.id)+'">Add to my expenses</button>'):''}</div>
+      ${s==='rejected'?`<input class="dnote" data-i="${esc(it.id)}" maxlength="200" placeholder="Reason (they will see this)" value="${esc(d.note||'')}" aria-label="Reason">`:''}</div>`}).join('');
+  return `<div class="card" data-r="${esc(rec.id)}"><div style="display:flex;justify-content:space-between;gap:8px;align-items:flex-start"><div style="min-width:0"><b>${esc(who)}</b><div class="muted" style="overflow-wrap:anywhere">${esc(rec.from.email)} · sent ${rec.sent?new Date(rec.sent).toLocaleDateString():''}</div></div><div class="amt">${money(tot)}</div></div>
+   <p class="muted" style="margin:6px 0">${pend?pend+' waiting · ':''}${cnt('approved')} approved · ${cnt('paid')} paid · ${cnt('rejected')} not approved</p>
+   ${rec.verified?'':'<div class="rule warn"><b>Sender not checked</b>This report was opened from a file, so Google has not confirmed who sent it.</div>'}
+   ${known||!rec.from.email?'':`<div class="rule warn"><b>Not on your staff list</b>${esc(rec.from.email)} is not on your staff list. <button class="mini" data-act="addstaff">Add to staff</button></div>`}
+   ${rows}
+   <div class="actions">${pend?'<button class="btn sec" data-act="approveall">Approve all waiting</button>':''}<button class="btn${rec.dirty?'':' sec'}" data-act="senddec"${rec.dirty?'':' disabled'}>${rec.dirty?'Send decisions to '+esc(who):'Decisions sent'}</button>
+    ${rec.from.email?`<a class="btn sec" href="${esc(decisionMail(rec))}">Email decisions</a>`:''}<button class="btn del" data-act="del">Remove</button></div></div>`}
+function teamOwner(T){
+  const reps=[...teamRecs].sort((a,b)=>(b.sent||0)-(a.sent||0));
+  $('#main').innerHTML=`<div class="card"><h3 style="margin-top:0">Your staff</h3>
+   <p class="muted">One person per line: name, then their Gmail address. Reports from anyone else are flagged.</p>
+   <textarea id="stf" rows="4" placeholder="Jane Smith, jane@gmail.com" aria-label="Staff">${esc(staffText(T.staff))}</textarea>
+   <div class="actions"><button class="btn sec" id="stfs">Save staff</button></div></div>
+  <div class="card"><h3 style="margin-top:0">Reports from staff</h3>
+   <p class="muted">When staff send a report, Google emails you a link. Tap “Check for new reports” and pick the file from “Shared with me”. Review each item, then send your decisions back.</p>
+   <div class="actions">${PICKER_KEY?'<button class="btn" id="tpick">Check for new reports</button>':''}<button class="btn${PICKER_KEY?' sec':''}" id="timp">Open a report file…</button></div>
+   <input type="file" id="tfile" accept=".json,application/json" class="hidden" multiple><p class="muted" id="tmsg" aria-live="polite"></p></div>
+  ${reps.map(reportCard).join('')}`;
+  $('#stfs').onclick=()=>{saveTeam({staff:parseStaff($('#stf').value)});teamNote='Saved.';teamRedraw()};
+  const opened=async(p)=>{let n=0,err='';for(const x of p){try{await x();n++}catch(e){err=e.message||String(e)}}await load();autoSync();teamNote=(n?`Opened ${n} report${n===1?'':'s'}. `:'')+err;teamRedraw()};
+  if($('#tpick'))$('#tpick').onclick=async()=>{$('#tmsg').textContent='Opening Google…';
+    try{const ids=await pickReports();if(!ids.length){teamNote='';teamRedraw();return}await opened(ids.map(id=>()=>openReportFile(id)))}
+    catch(e){teamNote=e.message||'Could not open the picker.';teamRedraw()}};
+  $('#timp').onclick=()=>$('#tfile').click();
+  $('#tfile').onchange=async e=>{const fs=[...e.target.files];e.target.value='';
+    await opened(fs.map(f=>async()=>addReport(JSON.parse(await f.text()),{fileName:f.name})))};
+  document.querySelectorAll('[data-r]').forEach(card=>{
+    const rec=()=>teamRecs.find(x=>x.id===card.dataset.r);
+    card.querySelectorAll('[data-act]').forEach(b=>b.onclick=async()=>{const r=rec();if(!r)return;const a=b.dataset.act,i=b.dataset.i;
+      if(a==='dec'){const cur=(r.decisions[i]||{}).s,s=b.dataset.s;await teamDecide(r,{[i]:cur===s?null:{s,note:s==='rejected'?(r.decisions[i]||{}).note:''}})}
+      else if(a==='approveall'){const p={};r.items.forEach(x=>{if(!r.decisions[x.id])p[x.id]={s:'approved'}});await teamDecide(r,p)}
+      else if(a==='mine'){await addToMine(r,i);await load();teamRedraw()}
+      else if(a==='addstaff'){saveTeam({staff:[...T.staff,{name:r.from.name,email:r.from.email}]});teamRedraw()}
+      else if(a==='senddec'){b.disabled=true;try{await sendDecisions(r);teamNote='Decisions sent. They will see them next time they open Team.'}catch(e){teamNote=e.message||'Could not send.'}await load();teamRedraw()}
+      else if(a==='del'){if(confirm('Remove this report from your list? It stays in Google Drive.')){queueDel(`x_${r.id}.json`);await rm('team',r.id);await load();autoSync();teamRedraw()}}});
+    card.querySelectorAll('.thumb[src]').forEach(im=>im.onclick=()=>zoom(im.src));
+    card.querySelectorAll('.dnote').forEach(inp=>inp.onchange=()=>{const r=rec();if(!r)return;const d=r.decisions[inp.dataset.i];if(d)teamDecide(r,{[inp.dataset.i]:{s:d.s,note:inp.value.trim()}})})});
+}
 
 // ---------- estimated tax (income, quarterly payments) ----------
 const EST_DEF={status:'single',other:0,withheld:0,prior:0,priorHigh:false,qbi:true,state:0,plan:'full',proj:'auto'};
