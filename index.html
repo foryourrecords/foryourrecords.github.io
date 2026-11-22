@@ -60,6 +60,10 @@ body.locked #drawer,body.locked #scrim{display:none!important}
 #lock .lockstay{display:flex;gap:8px;align-items:center;color:var(--text);font-size:14px;text-align:left}
 #lock .lockstay input{width:auto}
 #lock .lockalt{background:none;border:0;color:var(--accent);font:inherit;font-size:14px;font-weight:600;cursor:pointer;padding:6px}
+.rules{display:grid;gap:8px;margin-top:12px}
+.rule{padding:10px 12px;border-radius:12px;border:1px solid var(--line2);background:var(--card2);font-size:14px;line-height:1.45}
+.rule b{display:block;font-size:12px;margin-bottom:2px;color:var(--muted)}
+.rule.warn{border-color:var(--warn)}.rule.warn b{color:var(--warn)}
 .beta{display:inline-block;margin-left:6px;padding:1px 7px;border:1px solid var(--line2);border-radius:999px;font-size:11px;font-weight:600;color:var(--muted);vertical-align:2px;letter-spacing:0}
 body.locked header,body.locked nav,body.locked main,body.locked #report{display:none!important}
 @media (max-width:479px){header h1 .full{display:none}}
@@ -839,6 +843,78 @@ function bindFind(kind,draw){
   $('#fclr').onclick=()=>{f.q='';f.when='';if('cat' in f)f.cat='';q.value='';w.value='';if(c)c.value='';draw();q.focus()};
   draw()}
 
+// ---------- tax-rule checks ----------
+// Plain-language IRS rules, checked while you fill in a receipt (shown under the form) and across the year on the Audit page.
+// From IRS Publication 463 (travel, gift and car expenses) and the tangible property rules (the $2,500 de minimis limit).
+// They point things out and never block saving. A planning aid, not tax advice.
+const RULE_RE={meal:/meal|food|dining|restaurant/i,ent:/entertain|ticket|golf|concert|\bsports?\b/i,gift:/gift/i,
+  car:/fuel|\bgas\b|gasoline|vehicle|\bcar\b|\bauto\b|\btruck\b|tires?\b|oil change/i,carOk:/park|toll/i,
+  travel:/travel|lodg|hotel|airfare|flight/i,lodge:/lodg|hotel/i,cloth:/cloth|apparel|uniform|shoes?\b|boots?\b/i};
+function dayRange(a,b){const out=[];if(!a||!b)return out;const d=new Date(a+'T12:00:00Z'),e=new Date(b+'T12:00:00Z');
+  while(d<=e&&out.length<370){out.push(d.toISOString().slice(0,10));d.setUTCDate(d.getUTCDate()+1)}return out}
+// What a receipt is checked against: whether you log miles that year (standard mileage rate), and the days already covered by per diem.
+function ruleCtx(r){const y=String(r.date||'').slice(0,4),pd=new Set();
+  for(const x of receipts)if(x.perdiem&&x.id!==r.id)for(const d of dayRange(x.perdiem.from,x.perdiem.to))pd.add(d);
+  return {mileage:trips.some(t=>String(t.date).startsWith(y)),perdiemDays:pd}}
+function taxRules(r,ctx){ctx=ctx||{};const out=[],cat=String(r.category||''),amt=Number(r.amount)||0,note=String(r.notes||'').trim();
+  if(r.perdiem)return out;
+  const ent=RULE_RE.ent.test(cat),meal=RULE_RE.meal.test(cat)&&!ent,travel=RULE_RE.travel.test(cat);
+  if(ent)out.push({id:'ent',sev:'warn',text:"Entertainment such as tickets, golf or shows hasn't been deductible since 2018. Food and drinks bought separately at the event can still count as a business meal at 50%, so put those on their own receipt."});
+  if(meal){out.push({id:'meal50',sev:'info',text:amt>0?`Business meals are generally 50% deductible, so this ${money(amt)} meal counts as ${money(amt/2)}.`:'Business meals are generally 50% deductible.'});
+    if(!note)out.push({id:'mealnote',sev:'warn',text:'Write who you met and the business reason in the notes. The IRS asks for both.'});
+    if(ctx.perdiemDays&&ctx.perdiemDays.has(r.date))out.push({id:'mealpd',sev:'warn',text:'You claimed per diem for this day, which already covers your meals. Counting this receipt as well would claim the meal twice.'})}
+  if(RULE_RE.gift.test(cat)){
+    if(amt>25)out.push({id:'gift25',sev:'warn',text:`Business gifts are deductible up to $25 per person per year. If this was for one person, ${money(amt-25)} of it isn't deductible. Shipping, wrapping and engraving don't count toward the $25.`});
+    if(!note)out.push({id:'giftnote',sev:'warn',text:'Write who the gift was for and the business reason in the notes.'})}
+  if(RULE_RE.car.test(cat)&&!RULE_RE.carOk.test(cat)&&ctx.mileage)out.push({id:'car',sev:'warn',text:"You log miles at the standard mileage rate, which already covers gas, repairs, insurance and registration for that vehicle, so don't deduct those costs for it as well. Parking and tolls are fine."});
+  if(travel&&!note)out.push({id:'travelnote',sev:'warn',text:'Write where you went and the business reason for the trip in the notes.'});
+  if(RULE_RE.cloth.test(cat))out.push({id:'cloth',sev:'info',text:"Clothing is only deductible when your work requires it and it isn't suitable for everyday wear, like a uniform or safety gear."});
+  if(!r.hasPhoto&&(amt>=75||RULE_RE.lodge.test(cat)))out.push({id:'photo',sev:'warn',text:'Add a photo of the receipt. The IRS generally expects a receipt for expenses of $75 or more and for all lodging.'});
+  if(amt>2500&&!meal&&!travel)out.push({id:'big',sev:'info',text:'If one item on this receipt cost more than $2,500, it may need to be depreciated (or expensed under Section 179) instead of deducted all at once. Mention it to your accountant.'});
+  return out}
+const rulesHtml=list=>list.length?`<div class="rules">${list.map(x=>`<div class="rule ${x.sev}"><b>${x.sev==='warn'?'Check this':'Tax note'}</b>${esc(x.text)}</div>`).join('')}</div>`:'';
+const openReceipt=r=>{if(r)(r.perdiem?perDiemForm:receiptForm)(r)};
+
+// ---------- travel meals (per diem) ----------
+// Self-employed people can claim the federal daily meal rate for overnight business trips instead of keeping every meal receipt
+// (lodging still needs real receipts). Travel days count at 75%. Saved as one meals receipt, so it is 50% deductible like any meal.
+// Rates: GSA standard CONUS meals and incidentals $68 (Oct 2026 to Sep 2027); IRS Notice 2026-60 transportation industry rate $80.
+const PD_RATE=68;
+function perDiemCalc(from,to,rate){if(!from||!to||to<from)return null;const days=dayRange(from,to);
+  if(days.length<2)return {days:days.length,same:true,allowance:0};
+  const full=days.length-2,allowance=r2(rate*(full+1.5));return {days:days.length,full,allowance,deduct:r2(allowance/2)}}
+function perDiemForm(r){inForm=true;const isNew=!r;
+  const pd=(r&&r.perdiem)||{from:today(),to:today(),rate:PD_RATE,place:'',purpose:''};
+  $('#main').innerHTML=`<div class="card"><h3 style="margin-top:0">${isNew?'Add':'Edit'} travel meals (per diem)</h3>
+   <p class="muted">For an overnight business trip you can claim a set daily amount for meals instead of keeping every meal receipt. Hotels still need their real receipts.</p>
+   <div class="row"><div><label>Left home</label><input type="date" id="pf" value="${esc(pd.from)}"></div><div><label>Got back</label><input type="date" id="pt" value="${esc(pd.to)}"></div></div>
+   <label>Where you traveled</label><input id="pp" value="${esc(pd.place)}" placeholder="e.g. Charlotte, NC">
+   <label>Business purpose</label><input id="pu" value="${esc(pd.purpose)}" placeholder="e.g. Install job for Acme Corp">
+   <label>Daily meal rate ($)</label><input type="number" id="pr" step="1" min="0" inputmode="decimal" value="${Number(pd.rate)||PD_RATE}">
+   <p class="muted">$68 is the federal rate for most of the U.S. from October 2026 to September 2027. Pricier cities are $74 to $92: <a href="https://www.gsa.gov/travel/per-diem-rates" target="_blank" rel="noopener">look up your city ↗</a>. Transportation workers can use $80.</p>
+   <div id="pcalc"></div>
+   <div class="actions"><button class="btn" id="psave">Save</button><button class="btn sec" id="pcancel">Cancel</button>${isNew?'':'<button class="btn del" id="pdel">Delete</button>'}</div>
+   <p class="muted" id="pmsg" aria-live="polite" style="margin-bottom:0"></p></div>`;
+  const calc=()=>{const c=perDiemCalc($('#pf').value,$('#pt').value,parseFloat($('#pr').value)||0),box=$('#pcalc');
+    if(!c){box.innerHTML=rulesHtml([{sev:'warn',text:'The return date has to be on or after the day you left.'}]);return c}
+    if(c.same){box.innerHTML=rulesHtml([{sev:'warn',text:'Per diem is only for trips where you stay overnight away from home. For a day trip, keep your meal receipts instead.'}]);return c}
+    const rate=parseFloat($('#pr').value)||0,days=dayRange($('#pf').value,$('#pt').value),meals=receipts.filter(x=>!x.perdiem&&RULE_RE.meal.test(x.category||'')&&days.includes(x.date));
+    const list=[{sev:'info',text:`${c.days} days: ${c.full} full day${c.full===1?'':'s'} at ${money(rate)} and 2 travel days at 75% (${money(rate*0.75)} each) = ${money(c.allowance)}. Meals are 50% deductible, so about ${money(c.deduct)} counts on your taxes.`}];
+    if(meals.length)list.push({sev:'warn',text:`You also have ${meals.length} meal receipt${meals.length===1?'':'s'} on these days. Per diem replaces them, so delete ${meals.length===1?'it':'them'} or keep the receipts and skip per diem for this trip.`});
+    box.innerHTML=rulesHtml(list);return c};
+  ['pf','pt','pr'].forEach(k=>$('#'+k).addEventListener('input',calc));calc();
+  $('#pcancel').onclick=()=>render();
+  $('#psave').onclick=async()=>{const c=calc(),rate=parseFloat($('#pr').value)||0;
+    if(!c||c.same||!(rate>0)){$('#pmsg').textContent='Enter the dates of an overnight trip and a daily rate.';return}
+    const from=$('#pf').value,to=$('#pt').value,place=$('#pp').value.trim(),purpose=$('#pu').value.trim();
+    const cat=settings().categories.find(x=>RULE_RE.meal.test(x)&&!RULE_RE.ent.test(x))||'Meals';
+    const rec={...(r||{}),id:r?r.id:uid(),date:from,vendor:`Per diem: ${place||'travel meals'}`,amount:c.allowance,category:(r&&r.category)||cat,
+      notes:`Travel meals per diem, ${from} to ${to}: ${c.days} days at ${money(rate)} a day, first and last day at 75%.${purpose?' '+purpose:''}`,
+      photos:(r&&r.photos)||[],pids:(r&&r.pids)||[],origs:(r&&r.origs)||[],perdiem:{from,to,rate,place,purpose},updated:Date.now()};
+    await put('receipts',rec);year=from.slice(0,4);await load();autoSync();render()};
+  if(!isNew)$('#pdel').onclick=async()=>{if(confirm('Delete this per diem entry?')){queueDel(`r_${r.id}.json`);await rm('receipts',r.id);await load();render();autoSync()}};
+}
+
 // ----- receipts -----
 function receiptItem(x){return `<div class="item" data-id="${x.id}">
       ${(x.photos||[])[0]?`<img class="thumb" src="${x.photos[0]}">`:'<div class="thumb nophoto" title="No photo">'+I.receipt+'</div>'}
@@ -852,7 +928,7 @@ function vReceipts(){
   const ms=whenMonths(receipts);if(flt.r.when&&flt.r.when!=='all'&&!ms.includes(flt.r.when))flt.r.when=''; // picked month has nothing in the newly chosen year
   if(flt.r.cat&&!allCats.includes(flt.r.cat))flt.r.cat='';
   $('#main').innerHTML=`<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">
-    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="add">+ Add receipt</button><button class="btn sec" id="upl">${I.dl.replace('M12 4v11M7 11l5 5 5-5M5 20h14','M12 16V5M7 9l5-5 5 5M5 20h14')}Upload receipts / invoices</button><button class="btn sec" id="xl">${I.export}Export to spreadsheet</button></div>${yearPicker()}</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="add">+ Add receipt</button><button class="btn sec" id="upl">${I.dl.replace('M12 4v11M7 11l5 5 5-5M5 20h14','M12 16V5M7 9l5-5 5 5M5 20h14')}Upload receipts / invoices</button><button class="btn sec" id="xl">${I.export}Export to spreadsheet</button><button class="btn sec" id="pdadd">${I.cal}Travel meals (per diem)</button></div>${yearPicker()}</div>
     <input type="file" id="ufiles" accept="image/*,.heic,.heif,application/pdf" multiple class="hidden">
     <p class="muted" style="margin-bottom:0">Upload photos or PDFs, new or from past months. Each one is read and opened for you to check, then saved. “Export to spreadsheet” saves every receipt from every year as an Excel file.</p><p class="muted" id="xmsg" aria-live="polite" style="margin-bottom:0"></p></div>
    <div class="card"><h3 style="margin-top:0">Upload by category</h3>
@@ -865,9 +941,9 @@ function vReceipts(){
     const rs=receipts.filter(x=>inWhen(x,f.when)&&(!f.cat||x.category===f.cat)&&hits(f.q,[x.vendor,x.category,x.client,x.notes,Number(x.amount||0).toFixed(2),x.date]));
     $('#rlist').innerHTML=rs.length?rs.map(receiptItem).join(''):`<p class="muted" style="margin:0">${active?'No receipts match your search.':'No receipts for this year.'}</p>`;
     if($('#fsum')){$('#fsum').textContent=`${rs.length} receipt${rs.length===1?'':'s'} · ${money(rs.reduce((s,x)=>s+Number(x.amount||0),0))}${active?'':' in '+year}`;$('#fclr').hidden=!active}
-    document.querySelectorAll('#rlist .item').forEach(e=>e.onclick=()=>receiptForm(receipts.find(r=>r.id===e.dataset.id)))};
+    document.querySelectorAll('#rlist .item').forEach(e=>e.onclick=()=>openReceipt(receipts.find(r=>r.id===e.dataset.id)))};
   if($('#fq'))bindFind('r',draw);else draw();
-  bindYear();$('#add').onclick=()=>receiptForm();
+  bindYear();$('#add').onclick=()=>receiptForm();$('#pdadd').onclick=()=>perDiemForm();
   $('#upl').onclick=()=>$('#ufiles').click();$('#xl').onclick=exportReceiptsXlsx;
   let pickCat='';document.querySelectorAll('.cupl').forEach(b=>b.onclick=()=>{pickCat=cats[b.dataset.i];$('#cfiles').click()});
   $('#cfiles').onchange=e=>{const fs=[...e.target.files].filter(f=>isPic(f)||f.type==='application/pdf'||/\.pdf$/i.test(f.name));e.target.value='';if(fs.length)startUploads(fs,pickCat)};
@@ -885,13 +961,17 @@ function receiptForm(r,opts={}){
    <label style="display:flex;gap:8px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" id="bl" style="width:auto" ${r.billable?'checked':''}> Billable to this client</label>
    <label style="display:flex;gap:8px;align-items:center;color:var(--text);font-size:15px"><input type="checkbox" id="iv" style="width:auto" ${r.invoiced?'checked':''}> Already invoiced${r.invoiced?` (${esc(r.invoiced)})`:''}</label>
    <label>Notes / business purpose</label><textarea id="n" rows="2">${esc(r.notes)}</textarea>
+   <div id="rules" aria-live="polite"></div>
    <label>Photos</label><div class="photos" id="ph"></div>
    <div class="actions"><button class="btn sec" id="cam">${I.cam}Take photo</button><button class="btn sec" id="up">${I.img}Upload photo or PDF</button><button class="btn sec" id="scan">${I.scan}Read receipt</button></div>
    <p class="muted" id="scanmsg" aria-live="polite"></p>
    <input type="file" id="f1" accept="image/*" capture="environment" class="hidden">
    <input type="file" id="f2" accept="image/*,.heic,.heif,application/pdf" multiple class="hidden">
    <div class="actions"><button class="btn" id="save">Save</button><button class="btn sec" id="cancel">${isNew&&upTotal?'Skip':'Cancel'}</button>${isNew?'':'<button class="btn del" id="del">Delete</button>'}</div></div>`;
-  const drawP=()=>{$('#ph').innerHTML=photos.length?photos.map((p,i)=>`<div><img src="${p}" data-z="${i}"><button class="x" data-i="${i}" aria-label="Remove photo">×</button>${origs[i]?`<button class="orig" data-o="${i}">Original</button>`:''}</div>`).join(''):'<span class="muted">None yet</span>';
+  const drawRules=()=>{const el=$('#rules');if(!el)return;const rr={...r,category:$('#c').value,amount:parseFloat($('#a').value)||0,notes:$('#n').value,date:$('#d').value,hasPhoto:photos.length>0};
+    el.innerHTML=rulesHtml(taxRules(rr,ruleCtx(rr)))};
+  ['a','c','n','d'].forEach(k=>['input','change'].forEach(ev=>$('#'+k).addEventListener(ev,drawRules)));
+  const drawP=()=>{drawRules();$('#ph').innerHTML=photos.length?photos.map((p,i)=>`<div><img src="${p}" data-z="${i}"><button class="x" data-i="${i}" aria-label="Remove photo">×</button>${origs[i]?`<button class="orig" data-o="${i}">Original</button>`:''}</div>`).join(''):'<span class="muted">None yet</span>';
     $('#ph').querySelectorAll('img').forEach(im=>im.onclick=()=>zoom(photos[im.dataset.z]));
     $('#ph').querySelectorAll('.orig').forEach(b=>b.onclick=()=>zoom(origs[b.dataset.o])); // the photo exactly as taken
     $('#ph').querySelectorAll('.x').forEach(b=>b.onclick=()=>{photos.splice(b.dataset.i,1);pids.splice(b.dataset.i,1);origs.splice(b.dataset.i,1);drawP()});};
@@ -909,7 +989,7 @@ function receiptForm(r,opts={}){
       if(idx===0&&!dt)f.date=fixDate(f.date,fileDate||(!isNew&&r.date)||''); // reference: the day the photo was taken, or the date already saved
       const set=(id,val,label)=>{if(val===''||val==null||(!force&&touched[id]))return;$('#'+id).value=val;got.push(label)};
       set('v',f.vendor,f.vendor);set('a',f.amount!=null?f.amount.toFixed(2):'',f.amount!=null?money(f.amount):'');set('d',f.date,f.date);set('c',f.category,f.category);
-      msg.textContent=got.length?'Read from receipt: '+got.join(' · ')+'. Please check before saving.'+(f.amount==null?' The total was not clear, so enter the amount yourself.':''):'Couldn’t read this receipt clearly. Fill it in by hand, or retake the photo in good light.';
+      drawRules();msg.textContent=got.length?'Read from receipt: '+got.join(' · ')+'. Please check before saving.'+(f.amount==null?' The total was not clear, so enter the amount yourself.':''):'Couldn’t read this receipt clearly. Fill it in by hand, or retake the photo in good light.';
     }catch(e){msg.textContent=e.message||'Could not read the receipt.'}
     scanning=false;};
   const add=async fs=>{const wasEmpty=photos.length===0;
@@ -1305,7 +1385,7 @@ function auditCheck(recs,trips,opt){
   {const noOdo=trips.filter(t=>!odo(t.odoStart)&&num(t.miles)>0),whole=noOdo.filter(t=>Number.isInteger(num(t.miles)));
    if(noOdo.length>=10&&whole.length/noOdo.length>=0.7)add('m-round','Mileage','info','Many round-number mileage entries',`${whole.length} of ${noOdo.length} trips have whole-number miles. Examiners read that as estimating. Exact miles from a map or odometer are safer.`,whole.map(tItem))}
   // ---- receipts ----
-  add('r-photo','Receipts','high','Larger expenses with no receipt photo','The IRS generally wants a receipt or invoice for business expenses of $75 or more, and for all lodging.',recs.filter(r=>!hasPhoto(r)&&(num(r.amount)>=75||AUDIT_LODGE.test(r.category||''))).map(rItem));
+  add('r-photo','Receipts','high','Larger expenses with no receipt photo','The IRS generally wants a receipt or invoice for business expenses of $75 or more, and for all lodging.',recs.filter(r=>!r.perdiem&&!hasPhoto(r)&&(num(r.amount)>=75||AUDIT_LODGE.test(r.category||''))).map(rItem));
   add('r-meal','Receipts','warn','Business meals with no note','For a business meal, write who you met and the business reason in the notes.',recs.filter(r=>AUDIT_MEAL.test(r.category||'')&&!String(r.notes||'').trim()).map(rItem));
   add('r-vendor','Receipts','warn','Receipts with no vendor','Each expense should say who was paid.',recs.filter(r=>!String(r.vendor||'').trim()).map(rItem));
   add('r-cat','Receipts','warn','Receipts with no category','Expenses should be sorted into a category so they can be reported on the right tax line.',recs.filter(r=>!String(r.category||'').trim()).map(rItem));
@@ -2344,6 +2424,13 @@ function auditFindings(){
     if(Math.abs(d)>=1)F.push({id:'x-rate',group:'Tax setup',sev:d>0?'warn':'info',title:'You use your own flat mileage rate',why:`Your rate gives ${money(flat)} for ${year}. The IRS rates by trip date give ${money(irs)}${d>0?', so you may be claiming more than the standard rate allows':''}. Turn on the IRS rate in Settings unless you have a reason not to.`,items:[{kind:'none',text:`Difference: ${money(d)}`}]})}
   try{const C=estCalc(),old=Number(year)<Number(cur)||today()>year+'-04-15';
     if(C.inc>0&&C.est.needed>=1000&&!C.pays.some(p=>p.type!=='state')&&old)F.push({id:'x-est',group:'Tax setup',sev:'warn',title:'No estimated tax payments logged',why:`Your estimate is ${money(C.est.needed)}. If you paid, log it on the Est. Tax tab. If you did not, an underpayment penalty may apply.`,items:[{kind:'none',text:'Open the Est. Tax tab'}]})}catch(e){}
+  // tax rules across the year (the ones about the deduction itself; missing notes and photos are covered above)
+  {const TT={ent:['Entertainment expenses',"Entertainment such as tickets, golf or shows hasn't been deductible since 2018. Food and drinks bought separately can count as a business meal."],
+     gift25:['Gifts over $25','Business gifts are deductible up to $25 per person per year. Note who each gift was for so the right amount is claimed.'],
+     car:['Vehicle costs on top of the mileage rate','The standard mileage rate already covers gas, repairs, insurance and registration. Deducting them as well counts them twice. Parking and tolls are fine.'],
+     mealpd:['Meal receipts on per diem days','Per diem already covers meals on these days, so these receipts would be claimed twice.']},by={};
+   for(const r of T.r)for(const x of taxRules({...r,hasPhoto:(r.photos||[]).length>0},ruleCtx(r)))if(TT[x.id])(by[x.id]=by[x.id]||[]).push(r);
+   for(const k of Object.keys(TT))if(by[k])F.push({id:'t-'+k,group:'Tax rules',sev:'warn',title:TT[k][0],why:TT[k][1],items:by[k].map(r=>({kind:'receipt',id:r.id,text:`${r.date} · ${r.vendor||'(no vendor)'} · ${money(r.amount)}`}))})}
   const chk=(S.taxChk||{})[year]||{},done=TAX_TODO.filter(([k])=>chk[k]).length;
   if((Number(year)<Number(cur)||new Date().getMonth()>=10)&&done<TAX_TODO.length&&(T.r.length||T.t.length))F.push({id:'x-todo',group:'Tax setup',sev:'info',title:'Year-end checklist not finished',why:`${done} of ${TAX_TODO.length} items are ticked on the Tax Forms tab.`,items:TAX_TODO.filter(([k])=>!chk[k]).map(([k,l])=>({kind:'none',text:l}))});
   return F}
@@ -2365,7 +2452,7 @@ function vAudit(){
    <p class="muted">This is a record-keeping checklist, not tax or legal advice. Keep receipts and mileage records for at least three years after you file.</p>`;
   bindYear();
   document.querySelectorAll('[data-ak]').forEach(e=>e.onclick=()=>{
-    if(e.dataset.ak==='receipt'){const r=receipts.find(x=>x.id===e.dataset.ai);if(r)receiptForm(r)}else{const t=trips.find(x=>x.id===e.dataset.ai);if(t)tripForm(t)}});
+    if(e.dataset.ak==='receipt'){openReceipt(receipts.find(x=>x.id===e.dataset.ai))}else{const t=trips.find(x=>x.id===e.dataset.ai);if(t)tripForm(t)}});
 }
 
 // ---------- bank statement import ----------
